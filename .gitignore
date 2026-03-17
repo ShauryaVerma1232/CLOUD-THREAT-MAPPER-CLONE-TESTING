@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+
+# Node
+node_modules/
+dist/
+build/
+
+# Docker
+*.log
+docker-data/
+volumes/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env files
+.env
+
+# Database / local data
+*.db
+*.sqlite3
+
+# Neo4j / Postgres volumes
+neo4j_data/
+postgres_data/
+redis_data/

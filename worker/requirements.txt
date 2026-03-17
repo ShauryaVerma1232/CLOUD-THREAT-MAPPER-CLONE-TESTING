@@ -1,0 +1,7 @@
+celery[redis]
+redis
+boto3
+networkx
+neo4j
+structlog
+python-dotenv
