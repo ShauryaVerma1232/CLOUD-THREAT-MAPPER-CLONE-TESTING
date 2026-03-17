@@ -36,7 +36,6 @@ git --version
 
 ---
 
-## Day 1 Setup
 
 ### Step 1 — Clone / create the project
 ```bash
