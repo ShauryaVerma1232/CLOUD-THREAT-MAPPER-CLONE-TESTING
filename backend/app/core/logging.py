@@ -1,7 +1,4 @@
-"""
-Structured logging configuration using structlog.
-JSON output in production, human-readable in debug mode.
-"""
+"""Structured logging configuration using structlog."""
 import logging
 import sys
 
@@ -16,19 +13,16 @@ def setup_logging() -> None:
 
     shared_processors = [
         structlog.contextvars.merge_contextvars,
-        structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
     ]
 
     if settings.debug:
-        # Human-readable dev output
         processors = shared_processors + [
             structlog.dev.ConsoleRenderer(colors=True)
         ]
     else:
-        # JSON output for production / log aggregation
         processors = shared_processors + [
             structlog.processors.dict_tracebacks,
             structlog.processors.JSONRenderer(),
@@ -42,7 +36,6 @@ def setup_logging() -> None:
         cache_logger_on_first_use=True,
     )
 
-    # Also configure stdlib logging to route through structlog
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
