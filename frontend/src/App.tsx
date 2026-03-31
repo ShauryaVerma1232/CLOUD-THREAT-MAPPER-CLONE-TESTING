@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import Layout from './components/Layout'
 import DashboardPage from './pages/DashboardPage'
 import ScansPage from './pages/ScansPage'
@@ -14,7 +15,11 @@ export default function App() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="scans" element={<ScansPage />} />
-          <Route path="graph" element={<GraphPage />} />
+          <Route path="graph" element={
+            <ErrorBoundary>
+              <GraphPage />
+            </ErrorBoundary>
+          } />
           <Route path="results" element={<TestResultsPage />} />
           <Route path="reports" element={<ReportsPage />} />
         </Route>

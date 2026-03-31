@@ -71,7 +71,6 @@ const CY_STYLESHEET = [
       'control-point-weight': 0.5,
       'arrow-scale': 1.5,
       'line-opacity': 0.8,
-      'target-arrow-opacity': 0.9,
     },
   },
   {
@@ -85,7 +84,8 @@ const CY_STYLESHEET = [
   },
 ]
 
-function getNodeSize(nodeType: string): number {
+function getNodeSize(nodeType: string | undefined): number {
+  if (!nodeType) return 45
   const sizes: Record<string, number> = {
     INTERNET: 55,
     VPC: 70,
@@ -99,24 +99,6 @@ function getNodeSize(nodeType: string): number {
     SECURITY_GROUP: 45,
   }
   return sizes[nodeType] ?? 45
-}
-
-// Assign hierarchical ranks for top-down layout
-// Lower rank = higher in the graph (Internet at top)
-function getNodeRank(nodeType: string): number {
-  const ranks: Record<string, number> = {
-    INTERNET: 0,           // Top level - external access
-    IAM_USER: 1,           // Identity layer
-    IAM_ROLE: 1,           // Identity layer
-    S3_BUCKET: 1,          // Storage layer (can be accessed from anywhere)
-    VPC: 2,                // Network container
-    SUBNET: 3,             // Inside VPC
-    SECURITY_GROUP: 3,     // At subnet/instance level
-    EC2: 4,                // Compute inside subnet
-    RDS: 4,                // Database inside subnet
-    LAMBDA: 4,             // Serverless in VPC
-  }
-  return ranks[nodeType] ?? 5
 }
 
 export default function GraphPage() {
@@ -147,7 +129,10 @@ export default function GraphPage() {
     cyRef.current = cy
 
     cy.on('tap', 'node', (evt: any) => {
-      setSelectedNode(evt.target.data())
+      const nodeData = evt.target?.data?.()
+      if (nodeData && nodeData.id) {
+        setSelectedNode(nodeData)
+      }
     })
 
     cy.on('tap', (evt: any) => {
@@ -165,18 +150,53 @@ export default function GraphPage() {
 
   /* MEMOIZED ELEMENTS TO PREVENT RE-RENDER GRAPH RESET */
   const elements = useMemo(() => {
-    if (!graphData) return []
+    if (!graphData || !graphData.nodes || graphData.nodes.length === 0) {
+      console.log('[GraphPage] No graph data available')
+      return []
+    }
 
-    // Add rank data for hierarchical layout
-    const nodes = (graphData.nodes ?? []).map((node: any) => ({
-      ...node,
-      data: {
-        ...node.data,
-        rank: getNodeRank(node.data.node_type),
-      },
-    }))
+    // Deduplicate nodes by ID
+    const nodeMap = new Map<string, any>()
+    for (const node of (graphData.nodes ?? [])) {
+      const nodeId = node?.data?.id
+      if (!nodeId || nodeMap.has(nodeId)) continue
 
-    return [...nodes, ...(graphData.edges ?? [])]
+      const nodeType = node?.data?.node_type
+      const nodeData = {
+        ...node?.data,
+        id: nodeId,
+        node_type: nodeType ?? 'UNKNOWN',
+        label: node?.data?.label ?? nodeId ?? 'Unknown',
+      }
+      nodeMap.set(nodeId, { data: nodeData })
+    }
+
+    // Deduplicate edges by source-target pair
+    const edgeMap = new Map<string, any>()
+    let edgeId = 0
+    for (const edge of (graphData.edges ?? [])) {
+      const source = edge?.data?.source
+      const target = edge?.data?.target
+      const edgeType = edge?.data?.edge_type
+      if (!source || !target) continue
+
+      const key = `${source}-${target}-${edgeType}`
+      if (edgeMap.has(key)) continue
+
+      edgeMap.set(key, {
+        data: {
+          ...edge?.data,
+          id: `e${edgeId++}`,
+          source,
+          target,
+          edge_type: edgeType ?? 'connected_to',
+        }
+      })
+    }
+
+    const result = [...Array.from(nodeMap.values()), ...Array.from(edgeMap.values())]
+    console.log('[GraphPage] Rendered graph with', nodeMap.size, 'nodes and', edgeMap.size, 'edges')
+    return result
   }, [graphData])
 
   if (!scanId) {
@@ -311,11 +331,11 @@ export default function GraphPage() {
               <div className="space-y-2">
                 <div>
                   <span className="text-xs text-slate-500">Type</span>
-                  <p className="text-sm text-white font-mono">{selectedNode.node_type}</p>
+                  <p className="text-sm text-white font-mono">{selectedNode.node_type ?? 'Unknown'}</p>
                 </div>
                 <div>
                   <span className="text-xs text-slate-500">ID</span>
-                  <p className="text-sm text-white font-mono break-all">{selectedNode.id}</p>
+                  <p className="text-sm text-white font-mono break-all">{selectedNode.id ?? 'Unknown'}</p>
                 </div>
                 {selectedNode.label && (
                   <div>
@@ -330,6 +350,16 @@ export default function GraphPage() {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        )}
+
+        {!isLoading && !graphError && elements.length === 0 && graphData && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="text-center">
+              <Layers size={40} className="text-slate-700 mx-auto mb-3" />
+              <p className="text-slate-400 text-sm">No graph data available</p>
+              <p className="text-slate-500 text-xs mt-1">Run POST /graph/build/{scanId} first</p>
             </div>
           </div>
         )}
@@ -358,14 +388,15 @@ export default function GraphPage() {
             layout={{
               name: 'dagre',
               rankDir: 'TB',           // Top to Bottom layout
-              rankSep: 120,            // Spacing between ranks/layers
-              nodeSep: 60,             // Spacing between nodes in same rank
-              edgeSep: 40,             // Spacing between edges
-              align: 'center',         // Center align nodes in each rank
-              animate: false,
+              rankSep: 100,            // Spacing between ranks/layers
+              nodeSep: 50,             // Spacing between nodes in same rank
+              edgeSep: 30,             // Spacing between edges
               fit: true,
               padding: 50,
-            } as any}
+              animate: false,
+              sort: undefined,         // Don't sort - let dagre decide optimal layout
+              ranker: 'network-simplex' as any, // Better for hierarchical layouts
+            }}
             style={{ width: '100%', height: '100%' }}
             zoom={1}
             minZoom={0.3}
