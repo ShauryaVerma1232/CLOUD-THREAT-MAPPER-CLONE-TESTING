@@ -18,12 +18,13 @@ const NODE_COLORS: Record<string, string> = {
   IAM_ROLE: '#F59E0B',
   IAM_USER: '#8B5CF6',
   S3_BUCKET: '#10B981',
-  VPC: '#6B7280',
-  SUBNET: '#4B5563',
-  SECURITY_GROUP: '#9CA3AF',
+  VPC: '#6366F1',
+  SUBNET: '#14B8A6',
+  SECURITY_GROUP: '#F97316',
   RDS: '#EC4899',
   LAMBDA: '#06B6D4',
 }
+
 
 const CY_STYLESHEET = [
   {
@@ -32,45 +33,54 @@ const CY_STYLESHEET = [
       'background-color': (ele: any) =>
         NODE_COLORS[ele.data('node_type')] ?? '#64748b',
       label: 'data(label)',
-      color: '#E2E8F0',
-      'font-size': '11px',
+      color: '#FFFFFF',
+      'font-size': '10px',
       'font-family': 'system-ui, -apple-system, sans-serif',
       'font-weight': '500',
       'text-valign': 'bottom',
       'text-halign': 'center',
-      'text-margin-y': 6,
+      'text-margin-y': 8,
       'text-outline-width': 2,
       'text-outline-color': '#0F172A',
       'text-wrap': 'wrap',
-      'text-max-width': '140px',
+      'text-max-width': '120px',
       width: (ele: any) => getNodeSize(ele.data('node_type')),
       height: (ele: any) => getNodeSize(ele.data('node_type')),
       'border-width': 3,
       'border-color': '#1E293B',
       'border-opacity': 1,
+      'background-opacity': 0.9,
     },
   },
-  { selector: 'node[?public]', style: { 'border-color': '#EF4444', 'border-width': 5, 'border-opacity': 1 } },
-  { selector: 'node[node_type = "INTERNET"]', style: { shape: 'diamond', width: 55, height: 55 } },
-  { selector: 'node[node_type = "VPC"]', style: { shape: 'rectangle', width: 70, height: 55 } },
-  { selector: 'node[node_type = "SUBNET"]', style: { shape: 'round-rectangle', width: 50, height: 45 } },
-  { selector: 'node[node_type = "EC2"]', style: { shape: 'round-rectangle', width: 50, height: 45 } },
-  { selector: 'node[node_type = "RDS"]', style: { shape: 'round-rectangle', width: 50, height: 45 } },
-  { selector: 'node[node_type = "S3_BUCKET"]', style: { shape: 'round-rectangle', width: 50, height: 45 } },
-  { selector: 'node[node_type = "LAMBDA"]', style: { shape: 'round-rectangle', width: 48, height: 45 } },
-  { selector: 'node[node_type = "SECURITY_GROUP"]', style: { shape: 'roundrectangle', width: 45, height: 42 } },
+  { selector: 'node[?public]', style: {
+    'border-color': '#EF4444',
+    'border-width': 6,
+    'border-opacity': 1,
+    'border-style': 'dashed',
+  }},
+  { selector: 'node[node_type = "INTERNET"]', style: { shape: 'diamond', width: 60, height: 60 } },
+  { selector: 'node[node_type = "VPC"]', style: { shape: 'rectangle', width: 80, height: 60 } },
+  { selector: 'node[node_type = "SUBNET"]', style: { shape: 'round-rectangle', width: 55, height: 50 } },
+  { selector: 'node[node_type = "EC2"]', style: { shape: 'round-rectangle', width: 55, height: 50 } },
+  { selector: 'node[node_type = "RDS"]', style: { shape: 'round-rectangle', width: 55, height: 50 } },
+  { selector: 'node[node_type = "S3_BUCKET"]', style: { shape: 'round-rectangle', width: 55, height: 50 } },
+  { selector: 'node[node_type = "LAMBDA"]', style: { shape: 'round-rectangle', width: 50, height: 50 } },
+  { selector: 'node[node_type = "SECURITY_GROUP"]', style: { shape: 'round-rectangle', width: 50, height: 50 } },
+  { selector: 'node[node_type = "IAM_USER"]', style: { shape: 'round-rectangle', width: 50, height: 50 } },
+  { selector: 'node[node_type = "IAM_ROLE"]', style: { shape: 'round-rectangle', width: 50, height: 50 } },
   {
     selector: 'edge',
     style: {
-      width: 2.5,
-      'line-color': '#64748b',
-      'target-arrow-color': '#64748b',
+      width: 2,
+      'line-color': '#475569',
+      'target-arrow-color': '#475569',
       'target-arrow-shape': 'triangle',
       'curve-style': 'bezier',
-      'control-point-step-size': 50,
+      'control-point-step-size': 40,
       'control-point-weight': 0.5,
-      'arrow-scale': 1.5,
-      'line-opacity': 0.8,
+      'arrow-scale': 1.2,
+      'line-opacity': 0.6,
+      'target-arrow-opacity': 0.8,
     },
   },
   {
@@ -82,23 +92,49 @@ const CY_STYLESHEET = [
       'line-opacity': 1,
     },
   },
+  {
+    selector: 'edge[type = "contains"]',
+    style: {
+      'line-style': 'dashed',
+      'line-color': '#64748b',
+    },
+  },
 ]
 
 function getNodeSize(nodeType: string | undefined): number {
   if (!nodeType) return 45
   const sizes: Record<string, number> = {
-    INTERNET: 55,
-    VPC: 70,
-    EC2: 50,
-    RDS: 50,
-    LAMBDA: 48,
-    S3_BUCKET: 50,
-    IAM_USER: 45,
-    IAM_ROLE: 45,
-    SUBNET: 50,
-    SECURITY_GROUP: 45,
+    INTERNET: 60,
+    VPC: 80,
+    EC2: 55,
+    RDS: 55,
+    LAMBDA: 50,
+    S3_BUCKET: 55,
+    IAM_USER: 50,
+    IAM_ROLE: 50,
+    SUBNET: 55,
+    SECURITY_GROUP: 50,
   }
   return sizes[nodeType] ?? 45
+}
+
+// Truncate long IDs for display labels
+function truncateLabel(label: string, maxLength = 20): string {
+  if (!label || label.length <= maxLength) return label
+  // For subnet-xxx or vpc-xxx style IDs, keep the prefix and shorten the hash
+  const match = label.match(/^([a-z]+-[a-z]+-)([a-zA-Z0-9]+)$/)
+  if (match) {
+    const prefix = match[1]
+    const hash = match[2]
+    if (hash.length > 12) {
+      return `${prefix}${hash.slice(0, 6)}...${hash.slice(-4)}`
+    }
+  }
+  // For ARNs and other long strings
+  if (label.length > maxLength) {
+    return `${label.slice(0, maxLength)}...`
+  }
+  return label
 }
 
 export default function GraphPage() {
@@ -162,11 +198,13 @@ export default function GraphPage() {
       if (!nodeId || nodeMap.has(nodeId)) continue
 
       const nodeType = node?.data?.node_type
+      const rawLabel = node?.data?.label ?? nodeId ?? 'Unknown'
       const nodeData = {
         ...node?.data,
         id: nodeId,
         node_type: nodeType ?? 'UNKNOWN',
-        label: node?.data?.label ?? nodeId ?? 'Unknown',
+        label: truncateLabel(rawLabel),
+        fullLabel: rawLabel, // Store full label for tooltip
       }
       nodeMap.set(nodeId, { data: nodeData })
     }
@@ -208,12 +246,16 @@ export default function GraphPage() {
   }
 
   const legendItems = [
-    { type: 'INTERNET', label: 'Internet', color: NODE_COLORS.INTERNET, shape: 'diamond' },
-    { type: 'EC2', label: 'EC2 Instance', color: NODE_COLORS.EC2, shape: 'circle' },
-    { type: 'IAM_USER', label: 'IAM User', color: NODE_COLORS.IAM_USER, shape: 'circle' },
-    { type: 'S3_BUCKET', label: 'S3 Bucket', color: NODE_COLORS.S3_BUCKET, shape: 'circle' },
-    { type: 'VPC', label: 'VPC', color: NODE_COLORS.VPC, shape: 'rectangle' },
-    { type: 'SUBNET', label: 'Subnet', color: NODE_COLORS.SUBNET, shape: 'round-rectangle' },
+    { type: 'INTERNET', label: 'Internet', color: NODE_COLORS.INTERNET },
+    { type: 'VPC', label: 'VPC', color: NODE_COLORS.VPC },
+    { type: 'SUBNET', label: 'Subnet', color: NODE_COLORS.SUBNET },
+    { type: 'EC2', label: 'EC2 Instance', color: NODE_COLORS.EC2 },
+    { type: 'RDS', label: 'RDS Database', color: NODE_COLORS.RDS },
+    { type: 'LAMBDA', label: 'Lambda Function', color: NODE_COLORS.LAMBDA },
+    { type: 'S3_BUCKET', label: 'S3 Bucket', color: NODE_COLORS.S3_BUCKET },
+    { type: 'IAM_USER', label: 'IAM User', color: NODE_COLORS.IAM_USER },
+    { type: 'IAM_ROLE', label: 'IAM Role', color: NODE_COLORS.IAM_ROLE },
+    { type: 'SECURITY_GROUP', label: 'Security Group', color: NODE_COLORS.SECURITY_GROUP },
   ]
 
   const handleZoomIn = () => {
@@ -293,19 +335,17 @@ export default function GraphPage() {
 
         {/* Legend */}
         <div className="absolute bottom-4 left-4 z-10">
-          <div className="bg-slate-900/90 backdrop-blur rounded-lg border border-slate-700 p-3 shadow-xl">
+          <div className="bg-slate-900/90 backdrop-blur rounded-lg border border-slate-700 p-3 shadow-xl max-h-96 overflow-y-auto">
             <h3 className="text-xs font-semibold text-slate-300 mb-2">Legend</h3>
             <div className="flex flex-col gap-1.5">
               {legendItems.map(item => (
                 <div key={item.type} className="flex items-center gap-2">
                   <div
-                    className="rounded-sm"
+                    className="rounded"
                     style={{
-                      width: 14,
-                      height: 14,
+                      width: 12,
+                      height: 12,
                       backgroundColor: item.color,
-                      borderRadius: item.shape === 'circle' ? '50%' : item.shape === 'diamond' ? '2px' : '2px',
-                      transform: item.shape === 'diamond' ? 'rotate(45deg)' : 'none',
                     }}
                   />
                   <span className="text-xs text-slate-400">{item.label}</span>
@@ -388,14 +428,14 @@ export default function GraphPage() {
             layout={{
               name: 'dagre',
               rankDir: 'TB',           // Top to Bottom layout
-              rankSep: 100,            // Spacing between ranks/layers
-              nodeSep: 50,             // Spacing between nodes in same rank
-              edgeSep: 30,             // Spacing between edges
+              rankSep: 150,            // More spacing between ranks/layers
+              nodeSep: 80,             // More spacing between nodes in same rank
+              edgeSep: 50,             // More spacing between edges
               fit: true,
-              padding: 50,
+              padding: 80,
               animate: false,
-              sort: undefined,         // Don't sort - let dagre decide optimal layout
-              ranker: 'network-simplex' as any, // Better for hierarchical layouts
+              sort: undefined,
+              ranker: 'network-simplex' as any,
             }}
             style={{ width: '100%', height: '100%' }}
             zoom={1}
