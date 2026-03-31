@@ -34,3 +34,4 @@ Thumbs.db
 neo4j_data/
 postgres_data/
 redis_data/
+.aider*

@@ -1,4 +1,4 @@
-"""Threat Mapper — FastAPI Application Entry Point"""
+"""Threat Mapper — FastAPI Application Entry Point (Day 4)"""
 from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI
@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import get_settings
 from app.core.database import init_neo4j, close_neo4j
 from app.core.logging import setup_logging
-from app.api.routes import health, scans, graph
+from app.api.routes import health, scans, graph, ai
 
 setup_logging()
 log = structlog.get_logger()
@@ -39,6 +39,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(scans.router)
 app.include_router(graph.router)
+app.include_router(ai.router)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):

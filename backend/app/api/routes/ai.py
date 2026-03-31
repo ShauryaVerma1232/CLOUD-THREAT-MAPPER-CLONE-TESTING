@@ -174,9 +174,9 @@ async def get_ai_summary(
 
     row = (await db.execute(
         text("""
-            SELECT title, executive_summary, findings_json, remediation_roadmap, created_at
+            SELECT title, executive_summary, findings_json::text, remediation_roadmap::text, created_at
             FROM reports
-            WHERE scan_job_id::text = :sid
+            WHERE CAST(scan_job_id AS text) = :sid
             ORDER BY created_at DESC
             LIMIT 1
         """),
