@@ -114,19 +114,56 @@ const CY_STYLESHEET = [
   { selector: 'node[node_type = "SECURITY_GROUP"]', style: { shape: 'round-rectangle', width: 50, height: 50 } },
   { selector: 'node[node_type = "IAM_USER"]', style: { shape: 'round-rectangle', width: 50, height: 50 } },
   { selector: 'node[node_type = "IAM_ROLE"]', style: { shape: 'round-rectangle', width: 50, height: 50 } },
+  // Default edge style
   {
     selector: 'edge',
     style: {
       width: 2,
-      'line-color': '#475569',
-      'target-arrow-color': '#475569',
+      'line-color': (ele: any) => getEdgeColor(ele.data('edge_type')),
+      'target-arrow-color': (ele: any) => getEdgeColor(ele.data('edge_type')),
       'target-arrow-shape': 'triangle',
       'curve-style': 'bezier',
       'control-point-step-size': 40,
       'control-point-weight': 0.5,
       'arrow-scale': 1.2,
-      'line-opacity': 0.6,
-      'target-arrow-opacity': 0.8,
+      'line-opacity': 0.7,
+      'target-arrow-opacity': 0.9,
+    },
+  },
+  // Edge type: exposes (Internet -> resource) - Red
+  {
+    selector: 'edge[edge_type = "exposes"]',
+    style: {
+      'line-color': '#EF4444',
+      'target-arrow-color': '#EF4444',
+      'line-opacity': 0.8,
+    },
+  },
+  // Edge type: assumes_role - Orange
+  {
+    selector: 'edge[edge_type = "assumes_role"]',
+    style: {
+      'line-color': '#F59E0B',
+      'target-arrow-color': '#F59E0B',
+      'line-opacity': 0.8,
+    },
+  },
+  // Edge type: trusts - Purple
+  {
+    selector: 'edge[edge_type = "trusts"]',
+    style: {
+      'line-color': '#A855F7',
+      'target-arrow-color': '#A855F7',
+      'line-opacity': 0.8,
+    },
+  },
+  // Edge type: connected_to (network) - Gray
+  {
+    selector: 'edge[edge_type = "connected_to"]',
+    style: {
+      'line-color': '#64748B',
+      'target-arrow-color': '#64748B',
+      'line-opacity': 0.5,
     },
   },
   {
@@ -162,6 +199,19 @@ function getNodeSize(nodeType: string | undefined): number {
     SECURITY_GROUP: 50,
   }
   return sizes[nodeType] ?? 45
+}
+
+function getEdgeColor(edgeType: string | undefined): string {
+  if (!edgeType) return '#64748B'
+  const colors: Record<string, string> = {
+    exposes: '#EF4444',      // Red - internet exposure
+    assumes_role: '#F59E0B', // Orange - IAM role assumption
+    trusts: '#A855F7',       // Purple - trust relationships
+    connected_to: '#64748B', // Gray - network connectivity
+    network_access: '#3B82F6', // Blue - network access
+    can_access: '#10B981',   // Green - access permissions
+  }
+  return colors[edgeType] ?? '#64748B'
 }
 
 // Truncate long IDs for display labels
@@ -277,8 +327,11 @@ export default function GraphPage() {
         } else if (nodeType && ['EC2', 'RDS', 'LAMBDA'].includes(nodeType)) {
           // All compute resources belong to the first subnet
           parent = defaultSubnetId
+        } else if (nodeType === 'SECURITY_GROUP' && defaultVpcId) {
+          // Security groups are VPC-scoped - place them inside the VPC
+          parent = defaultVpcId
         }
-        // Global resources (IAM, S3, INTERNET, SECURITY_GROUP) have no parent
+        // Global resources (IAM, S3, INTERNET) have no parent
       }
 
       const nodeData = {
@@ -339,6 +392,13 @@ export default function GraphPage() {
     { type: 'IAM_USER', label: 'IAM User', color: NODE_COLORS.IAM_USER },
     { type: 'IAM_ROLE', label: 'IAM Role', color: NODE_COLORS.IAM_ROLE },
     { type: 'SECURITY_GROUP', label: 'Security Group', color: NODE_COLORS.SECURITY_GROUP },
+  ]
+
+  const edgeLegendItems = [
+    { type: 'exposes', label: 'Internet Exposure', color: '#EF4444' },
+    { type: 'assumes_role', label: 'Role Assumption', color: '#F59E0B' },
+    { type: 'trusts', label: 'Trust Relationship', color: '#A855F7' },
+    { type: 'connected_to', label: 'Network Connection', color: '#64748B' },
   ]
 
   const handleZoomIn = () => {
@@ -432,9 +492,9 @@ export default function GraphPage() {
 
         {/* Legend */}
         <div className="absolute bottom-4 left-4 z-10">
-          <div className="bg-slate-900/90 backdrop-blur rounded-lg border border-slate-700 p-3 shadow-xl max-h-96 overflow-y-auto">
-            <h3 className="text-xs font-semibold text-slate-300 mb-2">Legend</h3>
-            <div className="flex flex-col gap-1.5">
+          <div className="bg-slate-900/90 backdrop-blur rounded-lg border border-slate-700 p-3 shadow-xl max-h-[80vh] overflow-y-auto">
+            <h3 className="text-xs font-semibold text-slate-300 mb-3">Node Types</h3>
+            <div className="flex flex-col gap-1.5 mb-4">
               {legendItems.map(item => (
                 <div key={item.type} className="flex items-center gap-2">
                   <div
@@ -442,6 +502,22 @@ export default function GraphPage() {
                     style={{
                       width: 12,
                       height: 12,
+                      backgroundColor: item.color,
+                    }}
+                  />
+                  <span className="text-xs text-slate-400">{item.label}</span>
+                </div>
+              ))}
+            </div>
+            <h3 className="text-xs font-semibold text-slate-300 mb-2">Edge Types</h3>
+            <div className="flex flex-col gap-1.5">
+              {edgeLegendItems.map(item => (
+                <div key={item.type} className="flex items-center gap-2">
+                  <div
+                    className="rounded"
+                    style={{
+                      width: 20,
+                      height: 3,
                       backgroundColor: item.color,
                     }}
                   />
