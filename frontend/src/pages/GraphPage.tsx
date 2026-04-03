@@ -9,8 +9,8 @@ import CytoscapeComponent from 'react-cytoscapejs'
 cytoscape.use(fcose)
 cytoscape.use(dagre)
 
-import { AlertTriangle, X, Layers, ZoomIn, ZoomOut, Maximize, Eye, EyeOff, Box } from 'lucide-react'
-import { graphApi, type CyNode } from '../api/scanApi'
+import { AlertTriangle, X, Layers, ZoomIn, ZoomOut, Maximize, Eye, EyeOff, Box, Target, ShieldAlert, ChevronRight } from 'lucide-react'
+import { graphApi, type CyNode, type AttackPath } from '../api/scanApi'
 import clsx from 'clsx'
 
 const NODE_COLORS: Record<string, string> = {
@@ -175,6 +175,25 @@ const CY_STYLESHEET = [
       'line-opacity': 1,
     },
   },
+  // Attack path edge highlighting
+  {
+    selector: 'edge.attack-path',
+    style: {
+      width: 4,
+      'line-color': '#EF4444',
+      'target-arrow-color': '#EF4444',
+      'line-opacity': 1,
+      'line-style': 'solid',
+    },
+  },
+  {
+    selector: 'node.attack-path-node',
+    style: {
+      'border-width': 6,
+      'border-color': '#EF4444',
+      'border-opacity': 1,
+    },
+  },
   {
     selector: 'edge[type = "contains"]',
     style: {
@@ -243,6 +262,7 @@ export default function GraphPage() {
   const [showEdgeLabels, setShowEdgeLabels] = useState(false)
   const [zoomLevel, setZoomLevel] = useState(1)
   const [clusterMode, setClusterMode] = useState(true) // BloodHound-style clustering
+  const [selectedAttackPath, setSelectedAttackPath] = useState<AttackPath | null>(null)
 
   const { data: graphData, isLoading, error: graphError } = useQuery({
     queryKey: ['graph', scanId],
@@ -255,6 +275,16 @@ export default function GraphPage() {
     staleTime: Infinity,
 
     queryFn: () => graphApi.getGraph(scanId).then(r => r.data),
+  })
+
+  const { data: attackPathsData } = useQuery({
+    queryKey: ['attack-paths', scanId],
+    enabled: !!scanId,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+    staleTime: Infinity,
+    queryFn: () => graphApi.getPaths(scanId).then(r => r.data),
   })
 
 
@@ -279,6 +309,37 @@ export default function GraphPage() {
     cy.on('ready', () => {
       setZoomLevel(parseFloat(cy.zoom().toFixed(2)))
     })
+  }, [])
+
+  // Highlight attack path in the graph
+  const highlightAttackPath = useCallback((path: AttackPath) => {
+    if (!cyRef.current) return
+
+    // Clear previous highlights
+    cyRef.current.elements().removeClass('attack-path attack-path-node')
+
+    // Extract node IDs from path string or path_nodes if available
+    const pathParts = path.path_string.split(' → ')
+    const nodeIds = pathParts.map(p => p.trim())
+
+    // Highlight nodes in the path
+    nodeIds.forEach(label => {
+      const node = cyRef.current.nodes().filter((n: any) => n.data('label')?.includes(label))
+      if (node.length > 0) {
+        node.addClass('attack-path-node')
+      }
+    })
+
+    // Fit the view to show the path
+    if (nodeIds.length > 0) {
+      const nodesToHighlight = cyRef.current.nodes('.attack-path-node')
+      if (nodesToHighlight.length > 0) {
+        cyRef.current.animate({
+          fit: { eles: nodesToHighlight, padding: 50 },
+          duration: 500
+        })
+      }
+    }
   }, [])
 
   /* MEMOIZED ELEMENTS TO PREVENT RE-RENDER GRAPH RESET */
@@ -527,6 +588,160 @@ export default function GraphPage() {
             </div>
           </div>
         </div>
+
+        {/* Attack Paths Panel */}
+        {attackPathsData && attackPathsData.items && attackPathsData.items.length > 0 && (
+          <div className="absolute bottom-4 right-4 z-10 w-96 max-h-[60vh] overflow-y-auto">
+            <div className="bg-slate-900/90 backdrop-blur rounded-lg border border-slate-700 p-4 shadow-xl">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Target size={16} className="text-red-400" />
+                  <h3 className="text-sm font-semibold text-white">Attack Paths</h3>
+                </div>
+                <span className="text-xs text-slate-400">{attackPathsData.items.length} found</span>
+              </div>
+              <div className="space-y-2">
+                {attackPathsData.items.map((path, idx) => (
+                  <button
+                    key={path.path_id}
+                    onClick={() => {
+                      setSelectedAttackPath(path === selectedAttackPath ? null : path)
+                      if (path !== selectedAttackPath) {
+                        highlightAttackPath(path)
+                      } else {
+                        cyRef.current?.elements().removeClass('attack-path attack-path-node')
+                      }
+                    }}
+                    className={clsx(
+                      'w-full text-left p-2 rounded-lg border transition-colors',
+                      selectedAttackPath?.path_id === path.path_id
+                        ? 'bg-red-400/20 border-red-400/30'
+                        : 'bg-slate-800/50 border-slate-700 hover:bg-slate-800'
+                    )}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={clsx(
+                        'text-xs font-bold px-1.5 py-0.5 rounded',
+                        path.severity === 'critical' ? 'bg-red-400/20 text-red-400' :
+                        path.severity === 'high' ? 'bg-orange-400/20 text-orange-400' :
+                        path.severity === 'medium' ? 'bg-amber-400/20 text-amber-400' :
+                        'bg-slate-700 text-slate-400'
+                      )}>
+                        {path.severity}
+                      </span>
+                      <span className="text-xs font-mono text-slate-400">
+                        Risk: {path.risk_score.toFixed(1)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-300 font-mono truncate" title={path.path_string}>
+                      {path.path_string}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* No Attack Paths Banner */}
+        {attackPathsData && attackPathsData.items && attackPathsData.items.length === 0 && (
+          <div className="absolute bottom-4 right-4 z-10 w-80">
+            <div className="bg-emerald-400/10 backdrop-blur rounded-lg border border-emerald-400/20 p-4 shadow-xl">
+              <div className="flex items-center gap-2">
+                <ShieldAlert size={16} className="text-emerald-400" />
+                <div>
+                  <p className="text-sm text-emerald-400 font-medium">No Attack Paths Found</p>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    This environment has no internet-exposed attack vectors
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Attack Path Detail Panel */}
+        {selectedAttackPath && (
+          <div className="absolute top-20 right-4 z-10 w-96 max-h-[60vh] overflow-y-auto">
+            <div className="bg-slate-900/90 backdrop-blur rounded-lg border border-red-400/30 p-4 shadow-xl">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Target size={16} className="text-red-400" />
+                  <h3 className="text-sm font-semibold text-white">Attack Path Detail</h3>
+                </div>
+                <button
+                  onClick={() => {
+                    setSelectedAttackPath(null)
+                    cyRef.current?.elements().removeClass('attack-path attack-path-node')
+                  }}
+                  className="text-slate-400 hover:text-white transition-colors"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="space-y-3">
+                {/* Severity and Risk */}
+                <div className="flex items-center gap-2">
+                  <span className={clsx(
+                    'text-xs font-bold px-2 py-1 rounded',
+                    selectedAttackPath.severity === 'critical' ? 'bg-red-400/20 text-red-400' :
+                    selectedAttackPath.severity === 'high' ? 'bg-orange-400/20 text-orange-400' :
+                    selectedAttackPath.severity === 'medium' ? 'bg-amber-400/20 text-amber-400' :
+                    'bg-slate-700 text-slate-400'
+                  )}>
+                    {selectedAttackPath.severity.toUpperCase()}
+                  </span>
+                  <span className="text-xs text-slate-400">
+                    Risk Score: <span className="text-white font-mono">{selectedAttackPath.risk_score.toFixed(1)}</span>
+                  </span>
+                </div>
+
+                {/* Path Visualization */}
+                <div className="p-2 bg-slate-800 rounded-lg">
+                  <p className="text-xs text-slate-400 mb-2">Attack Path:</p>
+                  <div className="flex items-center flex-wrap gap-1">
+                    {selectedAttackPath.path_string.split(' → ').map((step, idx, arr) => (
+                      <div key={idx} className="flex items-center">
+                        <span className="text-xs text-white font-mono px-2 py-1 bg-slate-700 rounded">
+                          {step.trim().substring(0, 20)}{step.trim().length > 20 ? '...' : ''}
+                        </span>
+                        {idx < arr.length - 1 && (
+                          <ChevronRight size={12} className="text-slate-500 mx-0.5" />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Score Breakdown */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="p-2 bg-slate-800 rounded">
+                    <p className="text-xs text-slate-500">Reachability</p>
+                    <p className="text-sm font-mono text-white">{selectedAttackPath.reachability_score.toFixed(2)}</p>
+                  </div>
+                  <div className="p-2 bg-slate-800 rounded">
+                    <p className="text-xs text-slate-500">Impact</p>
+                    <p className="text-sm font-mono text-white">{selectedAttackPath.impact_score.toFixed(2)}</p>
+                  </div>
+                  <div className="p-2 bg-slate-800 rounded">
+                    <p className="text-xs text-slate-500">Exploitability</p>
+                    <p className="text-sm font-mono text-white">{selectedAttackPath.exploitability_score.toFixed(2)}</p>
+                  </div>
+                  <div className="p-2 bg-slate-800 rounded">
+                    <p className="text-xs text-slate-500">Exposure</p>
+                    <p className="text-sm font-mono text-white">{selectedAttackPath.exposure_score.toFixed(2)}</p>
+                  </div>
+                </div>
+
+                {/* Hop Count */}
+                <div className="flex items-center gap-2 text-xs text-slate-400">
+                  <span>Hops:</span>
+                  <span className="text-white font-mono">{selectedAttackPath.hop_count}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Node Details Panel */}
         {selectedNode && (

@@ -141,7 +141,7 @@ function PipelinePhase({
   isComplete,
   isCurrent,
 }: {
-  phase: { day: number; label: string; items: string[]; icon: React.ElementType }
+  phase: { label: string; items: string[]; icon: React.ElementType; status: 'complete' | 'current' | 'upcoming' }
   isComplete: boolean
   isCurrent: boolean
 }) {
@@ -182,7 +182,7 @@ function PipelinePhase({
           )}
           {isCurrent && (
             <span className="text-[9px] font-semibold text-blue-400 bg-blue-400/10 px-1.5 py-0.5 rounded uppercase tracking-wide">
-              In Progress
+              Active
             </span>
           )}
         </div>
@@ -191,12 +191,9 @@ function PipelinePhase({
         </p>
       </div>
 
-      <span className={clsx(
-        'text-xs font-mono tabular-nums',
-        isComplete ? 'text-slate-500' : isCurrent ? 'text-blue-400' : 'text-slate-700'
-      )}>
-        Day {phase.day}
-      </span>
+      {isComplete && (
+        <CheckCircle2 size={14} className="text-emerald-400 flex-shrink-0" />
+      )}
     </div>
   )
 }
@@ -274,41 +271,49 @@ function RecentScanRow({
 }
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
+// Pipeline phases with status
 const PHASES = [
   {
-    day: 1, label: 'Foundation',
-    items: ['Docker stack', 'FastAPI', 'PostgreSQL', 'Neo4j', 'Celery'],
+    label: 'Foundation',
+    items: ['Docker Stack', 'FastAPI Backend', 'PostgreSQL', 'Neo4j Graph DB', 'Celery Workers'],
     icon: Zap,
+    status: 'complete' as const,
   },
   {
-    day: 2, label: 'Infrastructure Scanner',
-    items: ['EC2', 'IAM', 'S3', 'VPC', 'RDS', 'Lambda'],
+    label: 'Infrastructure Scanner',
+    items: ['EC2 Instances', 'IAM Roles & Users', 'S3 Buckets', 'VPC & Subnets', 'RDS', 'Lambda'],
     icon: Cpu,
+    status: 'complete' as const,
   },
   {
-    day: 3, label: 'Threat Graph Builder',
-    items: ['NetworkX graph', 'Attack paths', 'Risk scoring', 'Neo4j'],
+    label: 'Threat Graph Builder',
+    items: ['NetworkX Graph', 'Attack Path Discovery', 'Risk Scoring', 'Neo4j Persistence'],
     icon: Network,
+    status: 'complete' as const,
   },
   {
-    day: 4, label: 'AI Reasoning Engine',
-    items: ['Path explanation', 'Risk prioritization', 'LLM integration'],
+    label: 'AI Reasoning Engine',
+    items: ['Path Explanation', 'Risk Prioritization', 'Groq LLM Integration', 'Executive Reports'],
     icon: Brain,
+    status: 'complete' as const,
   },
   {
-    day: 5, label: 'Sandbox Clone Generator',
-    items: ['Clone spec', 'Terraform templates', 'IaC deployment'],
+    label: 'Graph Visualization',
+    items: ['Interactive Cytoscape Graph', 'Attack Path Highlighting', 'Node Clustering', 'Edge Type Colors'],
+    icon: Activity,
+    status: 'complete' as const,
+  },
+  {
+    label: 'Sandbox Clone Generator',
+    items: ['Clone Specification', 'Terraform Templates', 'IaC Deployment', 'Isolated Testing'],
     icon: Box,
+    status: 'upcoming' as const,
   },
   {
-    day: 6, label: 'Security Test Runner',
-    items: ['IAM escalation', 'S3 access', 'Lateral movement'],
+    label: 'Security Test Runner',
+    items: ['IAM Escalation Tests', 'S3 Access Tests', 'Lateral Movement', 'Exploit Validation'],
     icon: Terminal,
-  },
-  {
-    day: 7, label: 'AI Report Generator',
-    items: ['Executive summary', 'Findings', 'Remediation roadmap'],
-    icon: FileBarChart2,
+    status: 'upcoming' as const,
   },
 ]
 
@@ -349,9 +354,8 @@ export default function DashboardPage() {
     aiAnalysesRun: 0,
   }
 
-  // Determine completed phases based on actual functionality
-  const completedPhases = 3 // Foundation, Scanner, Graph Builder are complete
-  const currentPhase = 3 // Working on AI Reasoning Engine
+  // Determine completed phases (5 complete, sandbox is upcoming)
+  const completedPhases = 5
 
   // Service status
   const services: ServiceStatus[] = [
@@ -536,9 +540,8 @@ export default function DashboardPage() {
                   Build Pipeline
                 </h2>
               </div>
-              <span className="text-xs text-slate-500">
-                <span className="text-white font-semibold">{completedPhases}</span>
-                <span className="text-slate-700"> / {PHASES.length} complete</span>
+              <span className="text-xs text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded-full">
+                5 / 7 Complete
               </span>
             </div>
 
@@ -547,22 +550,22 @@ export default function DashboardPage() {
               <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-gradient-to-r from-blue-500 to-emerald-400 rounded-full transition-all duration-500"
-                  style={{ width: `${(completedPhases / PHASES.length) * 100}%` }}
+                  style={{ width: `${(5 / 7) * 100}%` }}
                 />
               </div>
               <p className="text-xs text-slate-500 mt-1.5 text-right">
-                {Math.round((completedPhases / PHASES.length) * 100)}% complete
+                ~71% complete
               </p>
             </div>
 
             {/* Phases */}
             <div className="space-y-2">
-              {PHASES.map((phase, index) => (
+              {PHASES.map((phase) => (
                 <PipelinePhase
-                  key={phase.day}
+                  key={phase.label}
                   phase={phase}
-                  isComplete={index < completedPhases}
-                  isCurrent={index === completedPhases}
+                  isComplete={phase.status === 'complete'}
+                  isCurrent={false}
                 />
               ))}
             </div>

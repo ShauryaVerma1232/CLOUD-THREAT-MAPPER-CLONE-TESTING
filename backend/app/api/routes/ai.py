@@ -28,7 +28,9 @@ async def get_ai_provider():
     """Return which AI provider is currently configured."""
     provider = os.environ.get("AI_PROVIDER", "none")
     has_key = False
-    if provider == "gemini":
+    if provider == "groq":
+        has_key = bool(os.environ.get("GROQ_API_KEY"))
+    elif provider == "gemini":
         has_key = bool(os.environ.get("GEMINI_API_KEY"))
     elif provider == "anthropic":
         has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
@@ -42,11 +44,12 @@ async def get_ai_provider():
         "configured": has_key or provider in ("none", "ollama"),
         "ready":      provider != "none" and (has_key or provider == "ollama"),
         "model": {
+            "groq":      os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant"),
             "gemini":    os.environ.get("GEMINI_MODEL", "gemini-1.5-flash"),
             "anthropic": "claude-sonnet-4-20250514",
             "openai":    "gpt-4o",
             "ollama":    os.environ.get("OLLAMA_MODEL", "llama3"),
-            "none":      "stub — set AI_PROVIDER=gemini + GEMINI_API_KEY in .env",
+            "none":      "stub — set AI_PROVIDER=groq + GROQ_API_KEY in .env",
         }.get(provider, "unknown"),
     }
 
