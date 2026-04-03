@@ -36,6 +36,7 @@ NT_LAMBDA    = "LAMBDA"
 # ── Edge type constants ────────────────────────────────────────────────────────
 ET_EXPOSES      = "exposes"
 ET_ASSUMES      = "assumes_role"
+ET_CAN_ASSUME   = "can_assume"
 ET_CAN_ACCESS   = "can_access"
 ET_CONNECTED    = "connected_to"
 ET_TRUSTS       = "trusts"
@@ -350,6 +351,7 @@ def _edge_weight(rel_type: str, props: dict) -> float:
         ET_EXPOSES:    1.0,   # Direct internet exposure = easiest
         ET_TRUSTS:     0.9,   # Role trust = very easy if reachable
         ET_ASSUMES:    0.8,   # EC2 metadata SSRF → role assumption
+        ET_CAN_ASSUME: 0.85,  # IAM user can assume role (privilege escalation)
         ET_CAN_ACCESS: 0.75,
         ET_NETWORK:    0.7,
         ET_CONNECTED:  0.4,

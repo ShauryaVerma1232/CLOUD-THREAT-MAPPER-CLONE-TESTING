@@ -254,8 +254,8 @@ def run_ai_analysis(self, scan_job_id: str) -> dict:
         log.info("ai_task.prioritized")
         time.sleep(INTER_CALL_DELAY)
 
-        # 3 — Explain top critical/high paths (1 call each, with delay)
-        to_explain = [p for p in paths if p.get("severity") in ("critical", "high")][:MAX_PATHS_TO_EXPLAIN]
+        # 3 — Explain top critical/high/medium paths (1 call each, with delay)
+        to_explain = [p for p in paths if p.get("severity") in ("critical", "high", "medium")][:MAX_PATHS_TO_EXPLAIN]
 
         with neo4j_drv.session() as neo4j_session:
             for path in to_explain:

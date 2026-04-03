@@ -61,7 +61,7 @@ function ScanSelector({
 
 // ── AI status banner ──────────────────────────────────────────────────────────
 function AIStatusBanner({ scanId }: { scanId: string }) {
-  const { data: status, refetch } = useQuery({
+  const { data: status, isLoading, refetch } = useQuery({
     queryKey: ['ai-status', scanId],
     queryFn: () => aiApi.getStatus(scanId).then(r => r.data),
     refetchInterval: data => (!data?.ai_available ? 8000 : false),
@@ -76,6 +76,16 @@ function AIStatusBanner({ scanId }: { scanId: string }) {
     mutationFn: () => aiApi.triggerAnalysis(scanId).then(r => r.data),
     onSuccess: () => { refetch() },
   })
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-3 px-4 py-3 bg-slate-800/50
+                      border border-slate-700 rounded-xl text-sm">
+        <RefreshCw size={16} className="text-slate-400 animate-spin flex-shrink-0" />
+        <span className="text-slate-400">Loading AI analysis status...</span>
+      </div>
+    )
+  }
 
   if (!status) return null
 
@@ -114,22 +124,35 @@ function AIStatusBanner({ scanId }: { scanId: string }) {
     )
   }
 
+  // Check if analysis is actively running (has some annotated paths but not all)
+  const isAnalyzing = status && !status.ai_available && status.total_paths > 0
+
   return (
     <div className="flex items-center justify-between px-4 py-3 bg-brand/10
                     border border-brand/20 rounded-xl">
       <div className="flex items-center gap-3">
-        <Brain size={16} className="text-brand" />
-        <p className="text-sm text-brand font-medium">AI analysis not yet run for this scan</p>
+        {isAnalyzing ? (
+          <RefreshCw size={16} className="text-brand animate-spin" />
+        ) : (
+          <Brain size={16} className="text-brand" />
+        )}
+        <p className="text-sm text-brand font-medium">
+          {isAnalyzing
+            ? `AI analysis in progress... (${status.annotated_paths}/${status.total_paths} paths)`
+            : "AI analysis not yet run for this scan"}
+        </p>
       </div>
       <button
         onClick={() => triggerMutation.mutate()}
-        disabled={triggerMutation.isPending}
+        disabled={triggerMutation.isPending || isAnalyzing}
         className="flex items-center gap-2 px-3 py-1.5 bg-brand hover:bg-brand/90
                    text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50"
       >
         {triggerMutation.isPending
           ? <><RefreshCw size={12} className="animate-spin" /> Queuing…</>
-          : <><Play size={12} /> Run AI Analysis</>
+          : isAnalyzing
+            ? <><RefreshCw size={12} className="animate-spin" /> Running...</>
+            : <><Play size={12} /> Run AI Analysis</>
         }
       </button>
     </div>

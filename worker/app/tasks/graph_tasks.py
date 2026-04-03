@@ -90,10 +90,14 @@ def _write_to_neo4j_sync(driver, G, scan_job_id: str, paths: list) -> dict:
                 CREATE (p:AttackPath {
                     path_id: $pid, scan_job_id: $sjid,
                     path_string: $ps, risk_score: $rs,
-                    severity: $sev, hop_count: $hc, validated: false
+                    severity: $sev, hop_count: $hc, validated: false,
+                    reachability_score: $reach, impact_score: $impact,
+                    exploitability_score: $exploit, exposure_score: $exposure
                 })
             """, pid=path_id, sjid=scan_job_id, ps=ap.path_string,
-                rs=ap.risk_score, sev=ap.severity, hc=len(ap.path_nodes) - 1)
+                rs=ap.risk_score, sev=ap.severity, hc=len(ap.path_nodes) - 1,
+                reach=ap.reachability_score, impact=ap.impact_score,
+                exploit=ap.exploitability_score, exposure=ap.exposure_score)
 
             for pos, node_id in enumerate(ap.path_nodes):
                 try:

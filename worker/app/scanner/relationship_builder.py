@@ -23,6 +23,7 @@ def build_relationships(model: InfrastructureModel) -> None:
 
     _ec2_to_iam_role(model)
     _ec2_to_security_group(model)
+    _iam_user_assume_role_policies(model)
     _ec2_public_exposure(model)
     _lambda_to_iam_role(model)
     _lambda_vpc_attachment(model)
@@ -34,6 +35,50 @@ def build_relationships(model: InfrastructureModel) -> None:
 
     added = len(model.relationships) - before
     log.info("relationships.done", added=added, total=len(model.relationships))
+
+
+# ── IAM User → Role (can_assume via sts:AssumeRole policy) ────────────────────
+def _iam_user_assume_role_policies(model: InfrastructureModel) -> None:
+    """
+    Find IAM users who have policies granting sts:AssumeRole on specific roles.
+    This creates potential privilege escalation paths.
+    """
+    role_arns = {r.arn for r in model.iam_roles}
+
+    for user in model.iam_users:
+        assume_role_targets = set()
+
+        # Check inline policies
+        for policy in user.inline_policies:
+            doc = policy.get("document", {})
+            for stmt in doc.get("Statement", []):
+                if stmt.get("Effect") != "Allow":
+                    continue
+                actions = stmt.get("Action", [])
+                if isinstance(actions, str):
+                    actions = [actions]
+                if "sts:AssumeRole" in actions or "sts:*" in actions:
+                    resource = stmt.get("Resource", "*")
+                    if isinstance(resource, str):
+                        resource = [resource]
+                    for r in resource:
+                        if r != "*" and r in role_arns:
+                            assume_role_targets.add(r)
+
+        # Check attached policies (managed policies)
+        for policy in user.attached_policy_arns:
+            # For managed policies, we'd need to fetch the policy document
+            # For now, we rely on inline policies and role trust relationships
+            pass
+
+        # Add relationships for each role the user can assume
+        for role_arn in assume_role_targets:
+            model.relationships.append(Relationship(
+                source_id=user.arn,
+                target_id=role_arn,
+                rel_type="can_assume",
+                properties={"via": "sts_assume_role_policy"},
+            ))
 
 
 # ── EC2 → IAM Role (assumes_role) ─────────────────────────────────────────────
@@ -133,10 +178,12 @@ def _lambda_vpc_attachment(model: InfrastructureModel) -> None:
 # ── IAM Role trust relationships (trusts) ─────────────────────────────────────
 def _iam_role_trust_relationships(model: InfrastructureModel) -> None:
     """
-    Parse trust policies to find roles that can be assumed by other roles
-    or by external principals (cross-account, federated).
+    Parse trust policies to find roles that can be assumed by other roles,
+    IAM users, services, or external principals (cross-account, federated).
     """
     role_arns = {r.arn for r in model.iam_roles}
+    user_arns = {u.arn for u in model.iam_users}
+
     for role in model.iam_roles:
         for stmt in role.trust_policy.get("Statement", []):
             if stmt.get("Effect") != "Allow":
@@ -166,11 +213,20 @@ def _iam_role_trust_relationships(model: InfrastructureModel) -> None:
                         properties={"principal": "*", "risk": "critical"},
                     ))
                 elif p in role_arns and p != role.arn:
+                    # Role-to-role trust
                     model.relationships.append(Relationship(
                         source_id=p,
                         target_id=role.arn,
                         rel_type="trusts",
-                        properties={"principal": p},
+                        properties={"principal": p, "principal_type": "role"},
+                    ))
+                elif p in user_arns:
+                    # User-to-role assumption (privilege escalation path!)
+                    model.relationships.append(Relationship(
+                        source_id=p,
+                        target_id=role.arn,
+                        rel_type="can_assume",
+                        properties={"principal": p, "principal_type": "user"},
                     ))
 
 

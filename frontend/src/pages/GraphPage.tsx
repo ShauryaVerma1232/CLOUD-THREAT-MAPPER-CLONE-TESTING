@@ -277,7 +277,7 @@ export default function GraphPage() {
     queryFn: () => graphApi.getGraph(scanId).then(r => r.data),
   })
 
-  const { data: attackPathsData } = useQuery({
+  const { data: attackPathsData, isLoading: attackPathsLoading } = useQuery({
     queryKey: ['attack-paths', scanId],
     enabled: !!scanId,
     retry: false,
@@ -590,7 +590,7 @@ export default function GraphPage() {
         </div>
 
         {/* Attack Paths Panel */}
-        {attackPathsData && attackPathsData.items && attackPathsData.items.length > 0 && (
+        {!attackPathsLoading && attackPathsData && attackPathsData.items && attackPathsData.items.length > 0 && (
           <div className="absolute bottom-4 right-4 z-10 w-96 max-h-[60vh] overflow-y-auto">
             <div className="bg-slate-900/90 backdrop-blur rounded-lg border border-slate-700 p-4 shadow-xl">
               <div className="flex items-center justify-between mb-3">
@@ -644,7 +644,7 @@ export default function GraphPage() {
         )}
 
         {/* No Attack Paths Banner */}
-        {attackPathsData && attackPathsData.items && attackPathsData.items.length === 0 && (
+        {!attackPathsLoading && attackPathsData && (!attackPathsData.items || attackPathsData.items.length === 0) && (
           <div className="absolute bottom-4 right-4 z-10 w-80">
             <div className="bg-emerald-400/10 backdrop-blur rounded-lg border border-emerald-400/20 p-4 shadow-xl">
               <div className="flex items-center gap-2">
@@ -652,7 +652,7 @@ export default function GraphPage() {
                 <div>
                   <p className="text-sm text-emerald-400 font-medium">No Attack Paths Found</p>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    This environment has no internet-exposed attack vectors
+                    No attack paths detected from internet or compromised credentials
                   </p>
                 </div>
               </div>

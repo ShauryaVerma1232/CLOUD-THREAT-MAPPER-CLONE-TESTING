@@ -34,4 +34,50 @@ Thumbs.db
 neo4j_data/
 postgres_data/
 redis_data/
+
+# Aider
 .aider*
+
+# Memory / Sessions (personal context, not code)
+memory/sessions/
+
+# Artifacts (generated scan data, can be large)
+artifacts/
+
+# Local development
+*.bak
+*.tmp
+*.swp
+*~
+
+# Logs
+logs/
+*.log
+
+# Coverage / testing
+htmlcov/
+.coverage
+.pytest_cache/
+
+# Build artifacts
+*.egg-info/
+.eggs/
+
+# Compiled files
+*.so
+*.o
+*.a
+
+# Secrets (beyond .env)
+*.pem
+*.key
+*.crt
+credentials.json
+service-account*.json
+
+# AI Assistant context (personal workflow, not project code)
+claude.md
+.claude/
+
+# Documentation (study guides, demo prep - not core code)
+docs/

@@ -48,14 +48,16 @@ class AttackPath:
 
 def find_attack_paths(G: nx.DiGraph) -> list[AttackPath]:
     """
-    Enumerate all attack paths from INTERNET to high-value targets.
+    Enumerate all attack paths from:
+      1. INTERNET node (network exposure attacks)
+      2. IAM Users with credentials (credential compromise attacks)
+    To high-value targets.
     Returns a list of AttackPath objects sorted by risk_score descending.
     """
     log.info("path_finder.start", nodes=G.number_of_nodes(), edges=G.number_of_edges())
 
-    if "INTERNET" not in G:
-        log.warning("path_finder.no_internet_node")
-        return []
+    all_paths: list[AttackPath] = []
+    seen_path_strings: set[str] = set()
 
     # Identify high-value target nodes
     targets = [
@@ -65,35 +67,53 @@ def find_attack_paths(G: nx.DiGraph) -> list[AttackPath]:
     ]
     log.info("path_finder.targets", count=len(targets))
 
-    all_paths: list[AttackPath] = []
-    seen_path_strings: set[str] = set()
+    # Identify starting points for attack paths
+    starting_points: list[str] = []
 
-    for target in targets:
-        try:
-            paths_found = 0
-            for raw_path in nx.all_simple_paths(
-                G,
-                source="INTERNET",
-                target=target,
-                cutoff=MAX_PATH_LENGTH,
-            ):
-                if paths_found >= MAX_PATHS_PER_TGT:
-                    break
+    # 1. INTERNET node (network exposure attacks)
+    if "INTERNET" in G:
+        starting_points.append("INTERNET")
 
-                path_str = _path_string(G, raw_path)
-                if path_str in seen_path_strings:
-                    continue
-                seen_path_strings.add(path_str)
+    # 2. IAM Users with active credentials (credential compromise attacks)
+    for node_id, attrs in G.nodes(data=True):
+        if attrs.get("node_type") == NT_IAM_USER:
+            meta = attrs.get("metadata", {})
+            # Consider user a starting point if they have active keys or console access
+            if meta.get("active_key_count", 0) > 0 or meta.get("has_console_access"):
+                starting_points.append(node_id)
 
-                ap = _score_path(G, raw_path)
-                if ap.risk_score >= MIN_RISK_SCORE:
-                    all_paths.append(ap)
-                    paths_found += 1
+    log.info("path_finder.starting_points", internet=("INTERNET" in G), iam_users=len(starting_points) - (1 if "INTERNET" in G else 0))
 
-        except nx.NetworkXNoPath:
-            pass
-        except nx.NodeNotFound:
-            pass
+    for source in starting_points:
+        for target in targets:
+            if source == target:
+                continue
+
+            try:
+                paths_found = 0
+                for raw_path in nx.all_simple_paths(
+                    G,
+                    source=source,
+                    target=target,
+                    cutoff=MAX_PATH_LENGTH,
+                ):
+                    if paths_found >= MAX_PATHS_PER_TGT:
+                        break
+
+                    path_str = _path_string(G, raw_path)
+                    if path_str in seen_path_strings:
+                        continue
+                    seen_path_strings.add(path_str)
+
+                    ap = _score_path(G, raw_path, source_type="credential" if source != "INTERNET" else "network")
+                    if ap.risk_score >= MIN_RISK_SCORE:
+                        all_paths.append(ap)
+                        paths_found += 1
+
+            except nx.NetworkXNoPath:
+                pass
+            except nx.NodeNotFound:
+                pass
 
     # Sort by risk score descending
     all_paths.sort(key=lambda p: p.risk_score, reverse=True)
@@ -102,9 +122,11 @@ def find_attack_paths(G: nx.DiGraph) -> list[AttackPath]:
     return all_paths
 
 
-def _score_path(G: nx.DiGraph, node_ids: list[str]) -> AttackPath:
+def _score_path(G: nx.DiGraph, node_ids: list[str], source_type: str = "network") -> AttackPath:
     """
     Compute all score components for a single path.
+
+    source_type: "network" (from INTERNET) or "credential" (from compromised IAM user)
 
     Formula:
       risk_score = (reachability × 0.30)
@@ -135,7 +157,7 @@ def _score_path(G: nx.DiGraph, node_ids: list[str]) -> AttackPath:
     else:
         reachability = 0.0
 
-    # ── Impact ────────────────────────────────────────────────────────────────
+    # ── Impact ───────────────────────────────────────────────────────────────
     # Value of the terminal node
     terminal_type = G.nodes[node_ids[-1]].get("node_type", "")
     impact = IMPACT_WEIGHTS.get(terminal_type, 0.5)
@@ -159,19 +181,27 @@ def _score_path(G: nx.DiGraph, node_ids: list[str]) -> AttackPath:
             exploitability = min(exploitability + 0.2, 1.0)
             break
 
-    # ── Exposure ──────────────────────────────────────────────────────────────
-    # Is the first non-INTERNET node directly internet-accessible?
-    if len(node_ids) > 1:
-        second_node = G.nodes[node_ids[1]]
-        first_edge = edges[0] if edges else {}
-        if first_edge.get("edge_type") == "exposes" and second_node.get("public"):
-            exposure = 1.0
-        elif second_node.get("public"):
-            exposure = 0.7
+    # Boost for credential-based attacks (starting from IAM user with keys)
+    if source_type == "credential":
+        exploitability = min(exploitability + 0.15, 1.0)
+
+    # ── Exposure ─────────────────────────────────────────────────────────────
+    if source_type == "network":
+        # Is the first non-INTERNET node directly internet-accessible?
+        if len(node_ids) > 1:
+            second_node = G.nodes[node_ids[1]]
+            first_edge = edges[0] if edges else {}
+            if first_edge.get("edge_type") == "exposes" and second_node.get("public"):
+                exposure = 1.0
+            elif second_node.get("public"):
+                exposure = 0.7
+            else:
+                exposure = 0.3
         else:
-            exposure = 0.3
+            exposure = 0.0
     else:
-        exposure = 0.0
+        # Credential-based attacks start with valid access - high exposure
+        exposure = 0.8
 
     # ── Composite score ───────────────────────────────────────────────────────
     risk_score = (
