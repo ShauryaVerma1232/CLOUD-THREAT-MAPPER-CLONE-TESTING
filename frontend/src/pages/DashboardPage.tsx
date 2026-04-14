@@ -472,8 +472,8 @@ export default function DashboardPage() {
               <p className="text-xs text-slate-500 uppercase tracking-widest mb-2">Quick Links</p>
               <div className="space-y-1">
                 {[
-                  { label: 'API Documentation', href: 'http://localhost:8000/docs', desc: 'Swagger UI' },
-                  { label: 'Neo4j Browser', href: 'http://localhost:7474', desc: 'Graph database' },
+                  { label: 'API Documentation', href: 'http://localhost:18000/docs', desc: 'Swagger UI' },
+                  { label: 'Neo4j Browser', href: 'http://localhost:17474', desc: 'Graph database' },
                 ].map(({ label, href, desc }) => (
                   <a key={href} href={href} target="_blank" rel="noopener noreferrer"
                     className="flex items-center justify-between group px-3 py-2 rounded-lg

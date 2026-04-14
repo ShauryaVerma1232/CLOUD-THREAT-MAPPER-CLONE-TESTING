@@ -43,9 +43,16 @@ function RiskPill({ score }: { score: number | null }) {
   )
 }
 
+// ── AWS Profile presets ───────────────────────────────────────────────────────
+const AWS_PROFILES = [
+  { value: 'cloudgoat-vulnerable', label: '🔴 CloudGoat (Vulnerable Env)', desc: 'CloudGoat scenarios - us-east-1' },
+  { value: 'threatmapper-readonly', label: '🔵 Production (Read-Only)', desc: 'Production AWS - read-only scanning' },
+  { value: 'default', label: '⚪ Default', desc: 'Default AWS profile' },
+]
+
 // ── New scan form ─────────────────────────────────────────────────────────────
 function NewScanForm({ onCreated }: { onCreated: () => void }) {
-  const [profile, setProfile] = useState('threatmapper-readonly')
+  const [profile, setProfile] = useState('cloudgoat-vulnerable')
   const [region, setRegion] = useState('us-east-1')
   const [apiError, setApiError] = useState<string | null>(null)
 
@@ -68,23 +75,35 @@ function NewScanForm({ onCreated }: { onCreated: () => void }) {
         New Infrastructure Scan
       </h2>
 
-      <div className="flex flex-wrap gap-3 items-end">
-        <div className="flex-1 min-w-40">
-          <label className="block text-xs text-slate-500 mb-1">AWS Profile</label>
-          <input
-            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2
-                       text-sm text-white placeholder-slate-600 focus:outline-none
-                       focus:border-brand transition-colors"
-            placeholder="threatmapper-readonly"
+      {/* Top row: Label + description */}
+      <div className="mb-2">
+        <label className="block text-xs text-slate-500 mb-1">AWS Environment</label>
+        <p className="text-xs text-slate-500">
+          {AWS_PROFILES.find(p => p.value === profile)?.desc}
+        </p>
+      </div>
+
+      {/* Form row - all inputs aligned on same baseline */}
+      <div className="flex flex-wrap gap-3 items-center">
+        {/* Environment dropdown */}
+        <div className="flex-[2] min-w-64">
+          <select
+            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2.5
+                       text-sm text-white focus:outline-none focus:border-brand transition-colors"
             value={profile}
             onChange={e => setProfile(e.target.value)}
-          />
+          >
+            {AWS_PROFILES.map(p => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
+          </select>
         </div>
 
+        {/* Region dropdown */}
         <div className="flex-1 min-w-40">
           <label className="block text-xs text-slate-500 mb-1">Region</label>
           <select
-            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2
+            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2.5
                        text-sm text-white focus:outline-none focus:border-brand transition-colors"
             value={region}
             onChange={e => setRegion(e.target.value)}
@@ -93,33 +112,45 @@ function NewScanForm({ onCreated }: { onCreated: () => void }) {
           </select>
         </div>
 
-        <button
-          onClick={() => mutation.mutate()}
-          disabled={mutation.isPending || !profile.trim()}
-          className="flex items-center gap-2 px-4 py-2 bg-brand hover:bg-brand/90
-                     disabled:opacity-50 disabled:cursor-not-allowed
-                     text-white text-sm font-medium rounded-lg transition-colors"
-        >
-          <Play size={14} />
-          {mutation.isPending ? 'Starting…' : 'Start Scan'}
-        </button>
+        {/* Start Scan Button */}
+        <div>
+          <label className="block text-xs text-slate-500 mb-1 invisible">Label</label>
+          <button
+            onClick={() => mutation.mutate()}
+            disabled={mutation.isPending || !profile.trim()}
+            className="flex items-center gap-2 px-5 py-2.5 bg-brand hover:bg-brand/90
+                       disabled:opacity-50 disabled:cursor-not-allowed
+                       text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            <Play size={14} />
+            {mutation.isPending ? 'Starting…' : 'Start Scan'}
+          </button>
+        </div>
+      </div>
+
+      {/* Helper tips */}
+      <div className="flex items-center gap-4 mt-4 pt-3 border-t border-slate-800">
+        <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+          CloudGoat: Deploy scenario first, then scan
+        </span>
+        <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
+          Production: Read-only scanning
+        </span>
       </div>
 
       {apiError && (
-        <div className="mt-3 p-3 bg-red-400/10 border border-red-400/20 rounded-lg">
+        <div className="mt-4 p-3 bg-red-400/10 border border-red-400/20 rounded-lg">
           <p className="text-xs text-red-400">{apiError}</p>
         </div>
       )}
 
       {mutation.isSuccess && (
-        <div className="mt-3 p-3 bg-emerald-400/10 border border-emerald-400/20 rounded-lg">
+        <div className="mt-4 p-3 bg-emerald-400/10 border border-emerald-400/20 rounded-lg">
           <p className="text-xs text-emerald-400">Scan started — check the history below for status updates.</p>
         </div>
       )}
-
-      <p className="mt-3 text-xs text-slate-600">
-        Profile must exist in <code className="font-mono">~/.aws/credentials</code> with read-only permissions.
-      </p>
     </div>
   )
 }
@@ -144,18 +175,26 @@ function ScanRow({ job, onGraphClick }: {
 
       {/* Profile + region + account */}
       <div className="flex-1 min-w-0">
-        <p className="text-sm text-white font-medium truncate">
-          {job.aws_profile}
-          <span className="text-slate-600 mx-2">·</span>
-          <span className="text-slate-400 font-normal">{job.aws_region}</span>
-        </p>
-        <p className="text-xs text-slate-600 mt-0.5">
+        <div className="flex items-center gap-2">
+          <span className={clsx(
+            'text-xs font-medium px-1.5 py-0.5 rounded',
+            job.aws_profile === 'cloudgoat-vulnerable' ? 'bg-red-400/10 text-red-400' :
+            job.aws_profile === 'threatmapper-readonly' ? 'bg-blue-400/10 text-blue-400' :
+            'bg-slate-700 text-slate-300'
+          )}>
+            {job.aws_profile === 'cloudgoat-vulnerable' ? '🔴 CloudGoat' :
+             job.aws_profile === 'threatmapper-readonly' ? '🔵 Production' : '⚪ Default'}
+          </span>
+          <span className="text-slate-600">·</span>
+          <span className="text-slate-400 text-sm">{job.aws_region}</span>
+        </div>
+        <p className="text-xs text-slate-600 mt-1">
           {job.aws_account_id ? `Account: ${job.aws_account_id}` : 'Account pending…'}
           {' · '}
           {new Date(job.created_at).toLocaleString()}
         </p>
         {job.status === 'failed' && job.error_message && (
-          <p className="text-xs text-red-400 mt-0.5 truncate" title={job.error_message}>
+          <p className="text-xs text-red-400 mt-1 truncate" title={job.error_message}>
             {job.error_message.slice(0, 80)}
           </p>
         )}

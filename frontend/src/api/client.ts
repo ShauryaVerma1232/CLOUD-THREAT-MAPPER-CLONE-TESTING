@@ -1,9 +1,9 @@
 import axios from 'axios'
 
-// Call the backend directly on localhost:8000
+// Call the backend directly on localhost:18000
 // This works in WSL2 since both browser and backend are on the same host
 export const apiClient = axios.create({
-  baseURL: 'http://localhost:8000',
+  baseURL: 'http://localhost:18000',
   headers: { 'Content-Type': 'application/json' },
   timeout: 30_000,
 })

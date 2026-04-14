@@ -141,6 +141,79 @@ Respond ONLY with a valid JSON object:
 }}"""
 
 
+# ── Deep IAM Analysis ─────────────────────────────────────────────────────────
+
+def deep_iam_analysis_prompt(
+    path_string: str,
+    path_nodes: list[dict],
+    path_edges: list[dict],
+    risk_score: float,
+    severity: str,
+) -> str:
+    """
+    Build the user prompt for deep IAM privilege escalation analysis.
+    This is a specialized analysis that looks for subtle IAM attack patterns.
+    """
+    import json
+    return f"""You are an IAM security expert analyzing this AWS attack path for privilege escalation patterns.
+
+ATTACK PATH:
+{path_string}
+
+RISK SCORE: {risk_score}/10  SEVERITY: {severity.upper()}
+
+PATH DETAILS:
+{json.dumps(path_nodes, indent=2)}
+
+EDGES (relationships):
+{json.dumps(path_edges, indent=2)}
+
+Analyze this path for the following IAM privilege escalation patterns:
+
+1. **Policy Attachment/Modification**: Can any principal in the path attach policies, create policy versions, or set default policy versions?
+   - iam:AttachUserPolicy, iam:AttachGroupPolicy, iam:AttachRolePolicy
+   - iam:PutUserPolicy, iam:PutGroupPolicy, iam:PutRolePolicy
+   - iam:CreatePolicyVersion, iam:SetDefaultPolicyVersion
+
+2. **Role Assumption/Chaining**: Can any principal assume roles that grant additional privileges?
+   - Look for trust relationships that allow role assumption
+   - Check for role chaining possibilities
+
+3. **Credential Creation**: Can any principal create access keys or login profiles?
+   - iam:CreateAccessKey, iam:CreateLoginProfile
+   - iam:UpdateLoginProfile (password reset)
+
+4. **PassRole + Service Deployment**: Can any principal pass a role to a service (EC2, Lambda, etc.)?
+   - iam:PassRole combined with ec2:RunInstances, lambda:CreateFunction
+
+5. **Resource-Based Policy Modification**: Can any principal modify S3 bucket policies, KMS key policies, etc.?
+   - s3:PutBucketPolicy, kms:PutKeyPolicy, etc.
+
+6. **Glue/CloudFormation Deployment**: Can any principal deploy Glue dev endpoints or CloudFormation stacks?
+   - glue:CreateDevEndpoint, cloudformation:CreateStack (code execution)
+
+Respond ONLY with a valid JSON object:
+{{
+  "privilege_escalation_detected": true/false,
+  "escalation_techniques": [
+    {{
+      "technique": "Name of the technique (e.g., 'Policy Attachment via iam:AttachUserPolicy')",
+      "description": "How this technique works in this specific path",
+      "severity": "critical | high | medium | low",
+      "evidence": "Specific IAM permissions or trust relationships that enable this"
+    }}
+  ],
+  "attack_narrative_enhanced": "Step-by-step narrative incorporating the privilege escalation techniques",
+  "true_risk_assessment": "Revised risk assessment considering privilege escalation potential (may be higher than base score)",
+  "remediation_priority": "immediate | high | normal | low",
+  "specific_mitigations": [
+    "Specific IAM policy change #1 with exact permission to restrict",
+    "Specific IAM policy change #2",
+    "Monitoring/CloudTrail alert to add"
+  ]
+}}"""
+
+
 # ── Remediation roadmap ───────────────────────────────────────────────────────
 
 def remediation_roadmap_prompt(

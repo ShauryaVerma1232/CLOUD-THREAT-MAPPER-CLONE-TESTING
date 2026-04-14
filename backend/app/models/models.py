@@ -83,6 +83,14 @@ class AttackPath(Base):
     ai_explanation = Column(Text, nullable=True)
     ai_remediation = Column(Text, nullable=True)
 
+    # Deep IAM privilege escalation analysis
+    ai_privilege_escalation = Column(JSON, nullable=True)  # Full IAM analysis result
+    ai_escalation_techniques = Column(JSON, nullable=True)  # List of detected techniques
+    ai_true_risk_assessment = Column(Text, nullable=True)  # Revised risk considering escalation
+    ai_remediation_priority = Column(String(32), nullable=True, server_default="normal")
+    ai_escalation_applied = Column(Boolean, nullable=True, server_default="false")  # True if AI escalated risk score
+    ai_escalation_multiplier = Column(Float, nullable=True)  # Multiplier applied (1.3x - 2.0x)
+
     # Sandbox validation
     validated = Column(Boolean, default=False, nullable=False)
     validated_exploitable = Column(Boolean, nullable=True)
@@ -185,3 +193,48 @@ class Report(Base):
     pdf_path = Column(String(512), nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+# ── Blast Radius ───────────────────────────────────────────────────────────────
+class BlastRadius(Base):
+    """Blast radius analysis result for a compromised node."""
+    __tablename__ = "blast_radius"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    scan_job_id = Column(UUID(as_uuid=True), ForeignKey("scan_jobs.id"), nullable=False)
+    compromised_node_id = Column(String(256), nullable=False)
+
+    # Node metadata
+    compromised_node_type = Column(String(64), nullable=True)
+    compromised_node_label = Column(String(256), nullable=True)
+
+    # Direct reach (1 hop from compromised node)
+    direct_reach = Column(JSON, nullable=True)
+    direct_reach_count = Column(Integer, nullable=False, default=0)
+
+    # Secondary reach (2 hops from compromised node)
+    secondary_reach = Column(JSON, nullable=True)
+    secondary_reach_count = Column(Integer, nullable=False, default=0)
+
+    # All reachable nodes
+    all_reachable = Column(JSON, nullable=True)
+    total_reachable_count = Column(Integer, nullable=False, default=0)
+
+    # Critical resources at risk
+    critical_at_risk = Column(JSON, nullable=True)
+    critical_count = Column(Integer, nullable=False, default=0)
+
+    # Classification by hop distance
+    by_hop_distance = Column(JSON, nullable=True)
+
+    # Severity and scoring
+    blast_radius_severity = Column(String(32), nullable=False, default="low")
+    blast_radius_score = Column(Float, nullable=False, default=0.0)
+
+    # Attack paths from this node
+    attack_paths_from_here = Column(JSON, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    # Relationships
+    scan_job = relationship("ScanJob")

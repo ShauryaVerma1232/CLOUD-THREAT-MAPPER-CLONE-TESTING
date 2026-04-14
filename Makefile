@@ -43,10 +43,10 @@ up:
 	docker compose up -d --build
 	@echo ""
 	@echo "  ✅  Services starting up:"
-	@echo "     Frontend  → http://localhost:3000"
-	@echo "     Backend   → http://localhost:8000"
-	@echo "     API Docs  → http://localhost:8000/docs"
-	@echo "     Neo4j     → http://localhost:7474"
+	@echo "     Frontend  → http://localhost:13000"
+	@echo "     Backend   → http://localhost:18000"
+	@echo "     API Docs  → http://localhost:18000/docs"
+	@echo "     Neo4j     → http://localhost:17474"
 	@echo ""
 
 down:
@@ -67,12 +67,12 @@ logs-worker:
 
 # ── Database ──────────────────────────────────────────────────────────────────
 migrate:
-	docker compose exec backend alembic upgrade head
+	docker compose exec -w /app backend alembic upgrade head
 	@echo "✅  Migrations applied"
 
 migrate-create:
 	@read -p "Migration name: " name; \
-	docker compose exec backend alembic revision --autogenerate -m "$$name"
+	docker compose exec -w /app backend alembic revision --autogenerate -m "$$name"
 
 # ── Shells ────────────────────────────────────────────────────────────────────
 shell-back:

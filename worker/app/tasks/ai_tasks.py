@@ -22,9 +22,16 @@ from app.tasks.db_utils import get_sync_engine, get_sync_session
 
 log = structlog.get_logger()
 
-MAX_PATHS_TO_EXPLAIN  = 5    # reduced from 10
-MAX_NODES_TO_ANNOTATE = 3    # reduced from 20 — annotate top 3 most risky only
-INTER_CALL_DELAY      = 5.0  # seconds between API calls — stays under 15 RPM
+MAX_PATHS_TO_EXPLAIN   = 5    # reduced from 10
+MAX_NODES_TO_ANNOTATE  = 3    # reduced from 20 — annotate top 3 most risky only
+MAX_DEEP_IAM_ANALYSIS  = 2    # Deep IAM analysis for top 2 highest-risk paths
+INTER_CALL_DELAY       = 12.0  # seconds between API calls — conservative for Groq free tier (5 RPM)
+
+# Risk escalation multipliers
+ESCALATION_MULTIPLIER_CRITICAL = 2.0  # For admin privilege escalation
+ESCALATION_MULTIPLIER_HIGH = 1.7      # For significant privilege escalation
+ESCALATION_MULTIPLIER_MEDIUM = 1.5    # For moderate privilege escalation
+MIN_ESCALATION_MULTIPLIER = 1.3       # Minimum multiplier when escalation detected
 
 
 # ── Infrastructure helpers ─────────────────────────────────────────────────────
@@ -75,6 +82,134 @@ def _update_path_ai(db, path_id: str, explanation: dict) -> None:
     except Exception as e:
         db.rollback()
         log.warning("ai_task.path_update_error", error=str(e))
+
+
+def _update_path_iam_analysis(db, path_id: str, iam_analysis: dict) -> None:
+    """
+    Update attack_paths table with deep IAM privilege escalation analysis.
+    """
+    try:
+        db.execute(
+            text("""
+                UPDATE attack_paths
+                SET ai_privilege_escalation = :iam_analysis,
+                    ai_escalation_techniques = :techniques,
+                    ai_true_risk_assessment = :risk_assessment,
+                    ai_remediation_priority = :priority
+                WHERE id::text = :path_id
+            """),
+            {
+                "path_id":       path_id,
+                "iam_analysis":  json.dumps(iam_analysis),
+                "techniques":    json.dumps(iam_analysis.get("escalation_techniques", [])),
+                "risk_assessment": iam_analysis.get("true_risk_assessment", ""),
+                "priority":      iam_analysis.get("remediation_priority", "normal"),
+            },
+        )
+        db.commit()
+        log.info("ai_task.iam_analysis_saved", path_id=path_id)
+    except Exception as e:
+        db.rollback()
+        log.warning("ai_task.iam_analysis_update_error", error=str(e))
+
+
+def _update_path_risk_score(db, path_id: str, new_risk_score: float, new_severity: str) -> None:
+    """
+    Update attack_paths table with escalated risk score after AI analysis.
+    """
+    try:
+        db.execute(
+            text("""
+                UPDATE attack_paths
+                SET risk_score = :risk_score,
+                    severity = :severity,
+                    ai_escalation_applied = true
+                WHERE id::text = :path_id
+            """),
+            {
+                "path_id":    path_id,
+                "risk_score": new_risk_score,
+                "severity":   new_severity,
+            },
+        )
+        db.commit()
+        log.info("ai_task.risk_score_escalated", path_id=path_id, new_score=new_risk_score, new_severity=new_severity)
+    except Exception as e:
+        db.rollback()
+        log.warning("ai_task.risk_score_update_error", error=str(e))
+
+
+def _update_neo4j_path_iam_analysis(
+    neo4j_driver,
+    scan_job_id: str,
+    path_string: str,
+    iam_analysis: dict,
+) -> None:
+    """
+    Update Neo4j AttackPath node with IAM privilege escalation analysis.
+    Neo4j requires primitive types only, so we serialize complex objects to JSON strings.
+    """
+    try:
+        # Serialize all complex data to JSON strings for Neo4j compatibility
+        techniques = iam_analysis.get("escalation_techniques", [])
+        techniques_json = json.dumps(techniques) if techniques else "[]"
+
+        # Convert boolean to string to avoid Neo4j type issues
+        detected = str(iam_analysis.get("privilege_escalation_detected", False)).lower()
+
+        with neo4j_driver.session() as session:
+            session.run(
+                """
+                MATCH (p:AttackPath {scan_job_id: $sjid, path_string: $ps})
+                SET p.ai_iam_detected = $detected,
+                    p.ai_iam_techniques = $techniques_json,
+                    p.ai_iam_technique_count = $tech_count,
+                    p.ai_true_risk_assessment = $risk_assessment,
+                    p.ai_remediation_priority = $priority
+                """,
+                sjid=scan_job_id,
+                ps=path_string,
+                detected=detected,
+                techniques_json=techniques_json,
+                tech_count=len(techniques),
+                risk_assessment=iam_analysis.get("true_risk_assessment", ""),
+                priority=iam_analysis.get("remediation_priority", "normal"),
+            )
+        log.info("ai_task.neo4j_iam_analysis_updated", path_string=path_string[:50])
+    except Exception as e:
+        log.warning("ai_task.neo4j_iam_analysis_error", path_string=path_string[:50], error=str(e))
+
+
+def _update_neo4j_path_risk_score(
+    neo4j_driver,
+    scan_job_id: str,
+    path_string: str,
+    new_risk_score: float,
+    new_severity: str,
+    escalation_multiplier: float,
+) -> None:
+    """
+    Update Neo4j AttackPath node with escalated risk score.
+    """
+    try:
+        with neo4j_driver.session() as session:
+            session.run(
+                """
+                MATCH (p:AttackPath {scan_job_id: $sjid, path_string: $ps})
+                SET p.risk_score = $risk_score,
+                    p.severity = $severity,
+                    p.ai_escalation_multiplier = $multiplier,
+                    p.ai_escalation_applied = true
+                """,
+                sjid=scan_job_id,
+                ps=path_string,
+                risk_score=new_risk_score,
+                severity=new_severity,
+                multiplier=escalation_multiplier,
+            )
+        log.info("ai_task.neo4j_risk_score_escalated", path_string=path_string[:50], new_score=new_risk_score)
+    except Exception as e:
+        log.warning("ai_task.neo4j_risk_score_update_error", path_string=path_string[:50], error=str(e))
 
 
 def _load_scan_job(db, scan_job_id: str) -> dict | None:
@@ -281,6 +416,111 @@ def run_ai_analysis(self, scan_job_id: str) -> dict:
                 results["paths_explained"] += 1
                 log.info("ai_task.path_explained", path=path["path_string"][:60])
                 time.sleep(INTER_CALL_DELAY)
+
+        # 3b — Deep IAM privilege escalation analysis (optional, for highest-risk paths)
+        # Only run on paths with IAM-related resources and medium+ severity
+        iam_paths = []
+        for p in paths:
+            if p.get("severity") not in ("critical", "high", "medium"):
+                continue
+            # Parse path_nodes from JSON string if needed
+            nodes_data = p.get("path_nodes", "[]")
+            if isinstance(nodes_data, str):
+                try:
+                    nodes_data = json.loads(nodes_data)
+                except Exception:
+                    nodes_data = []
+            # Check if any node is IAM-related
+            # Nodes can be either dicts with node_type OR string ARNs
+            is_iam_path = False
+            for n in nodes_data:
+                if isinstance(n, dict) and "IAM" in str(n.get("node_type", "")):
+                    is_iam_path = True
+                    break
+                elif isinstance(n, str) and ":iam:" in n.lower():
+                    is_iam_path = True
+                    break
+            if is_iam_path:
+                iam_paths.append(p)
+            if len(iam_paths) >= MAX_DEEP_IAM_ANALYSIS:
+                break
+
+        for path in iam_paths:
+            try:
+                # Parse path_nodes and path_edges from JSON strings
+                nodes_list = json.loads(path["path_nodes"]) if isinstance(path["path_nodes"], str) else path["path_nodes"]
+                edges_list = json.loads(path["path_edges"]) if isinstance(path["path_edges"], str) else path["path_edges"]
+
+                original_risk_score = float(path["risk_score"])
+                original_severity = path["severity"]
+
+                iam_analysis = ai_engine.analyze_iam_privilege_escalation(
+                    path_string=path["path_string"],
+                    path_nodes=nodes_list,
+                    path_edges=edges_list,
+                    risk_score=original_risk_score,
+                    severity=original_severity,
+                )
+
+                # Save IAM analysis
+                _update_path_iam_analysis(db, path["id"], iam_analysis)
+                _update_neo4j_path_iam_analysis(
+                    neo4j_drv, scan_job_id, path["path_string"], iam_analysis
+                )
+
+                # Apply risk score escalation if privilege escalation detected
+                escalation_detected = iam_analysis.get("privilege_escalation_detected", False)
+                if escalation_detected:
+                    # Determine multiplier based on remediation priority
+                    priority = iam_analysis.get("remediation_priority", "normal")
+                    if priority == "critical":
+                        multiplier = ESCALATION_MULTIPLIER_CRITICAL
+                    elif priority == "high":
+                        multiplier = ESCALATION_MULTIPLIER_HIGH
+                    elif priority == "medium":
+                        multiplier = ESCALATION_MULTIPLIER_MEDIUM
+                    else:
+                        multiplier = MIN_ESCALATION_MULTIPLIER
+
+                    # Calculate new risk score
+                    new_risk_score = min(original_risk_score * multiplier, 10.0)  # Cap at 10.0
+
+                    # Determine new severity
+                    if new_risk_score >= 8.0:
+                        new_severity = "critical"
+                    elif new_risk_score >= 6.0:
+                        new_severity = "high"
+                    elif new_risk_score >= 3.5:
+                        new_severity = "medium"
+                    else:
+                        new_severity = "low"
+
+                    # Update database and Neo4j with escalated score
+                    _update_path_risk_score(db, path["id"], new_risk_score, new_severity)
+                    _update_neo4j_path_risk_score(
+                        neo4j_drv, scan_job_id, path["path_string"],
+                        new_risk_score, new_severity, multiplier
+                    )
+
+                    log.info(
+                        "ai_task.risk_escalated",
+                        path=path["path_string"][:50],
+                        original_score=original_risk_score,
+                        new_score=new_risk_score,
+                        multiplier=multiplier,
+                        priority=priority,
+                    )
+                else:
+                    log.info(
+                        "ai_task.iam_analysis_complete",
+                        path=path["path_string"][:50],
+                        escalation_detected=escalation_detected,
+                        priority=iam_analysis.get("remediation_priority"),
+                    )
+
+                time.sleep(INTER_CALL_DELAY)
+            except Exception as e:
+                log.warning("ai_task.iam_analysis_error", path=path.get("path_string"), error=str(e))
 
         # 4 — Annotate top 3 nodes (with delay between each)
         results["nodes_annotated"] = _annotate_high_risk_nodes(

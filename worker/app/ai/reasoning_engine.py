@@ -31,17 +31,19 @@ from app.ai.prompts import (
     node_annotation_prompt,
     remediation_roadmap_prompt,
     executive_summary_prompt,
+    deep_iam_analysis_prompt,
 )
 
 log = structlog.get_logger()
 
 # Token budget per call type
 TOKEN_BUDGETS = {
-    "path_explanation":   1200,
-    "prioritization":     1500,
-    "node_annotation":     300,
-    "remediation_roadmap": 1800,
-    "executive_summary":   1200,
+    "path_explanation":    1200,
+    "prioritization":      1500,
+    "node_annotation":      300,
+    "remediation_roadmap":  1800,
+    "executive_summary":    1200,
+    "deep_iam_analysis":    2000,
 }
 
 
@@ -128,6 +130,42 @@ class AIReasoningEngine:
             "risk_detail": "[AI unavailable]",
             "risk_level":  "info",
             "ai_error":    True,
+        }
+
+    def analyze_iam_privilege_escalation(
+        self,
+        path_string: str,
+        path_nodes: list[dict],
+        path_edges: list[dict],
+        risk_score: float,
+        severity: str,
+    ) -> dict[str, Any]:
+        """
+        Deep analysis of IAM privilege escalation patterns in an attack path.
+        Looks for subtle patterns like policy attachment, role chaining, PassRole abuse, etc.
+
+        Returns detailed analysis with escalation techniques, enhanced narrative, and specific mitigations.
+        """
+        prompt = deep_iam_analysis_prompt(
+            path_string=path_string,
+            path_nodes=path_nodes,
+            path_edges=path_edges,
+            risk_score=risk_score,
+            severity=severity,
+        )
+        result = self._call_with_fallback(
+            prompt,
+            max_tokens=2000,  # Larger budget for detailed analysis
+            call_name="deep_iam_analysis",
+        )
+        return result or {
+            "privilege_escalation_detected": False,
+            "escalation_techniques": [],
+            "attack_narrative_enhanced": "",
+            "true_risk_assessment": f"Base risk score: {risk_score}/10",
+            "remediation_priority": "normal",
+            "specific_mitigations": [],
+            "ai_error": True,
         }
 
     def generate_remediation_roadmap(
@@ -261,12 +299,45 @@ def _parse_json_response(raw: str) -> dict:
     # Try direct parse first
     try:
         return json.loads(cleaned)
-    except json.JSONDecodeError:
-        pass
+    except json.JSONDecodeError as e:
+        log.debug("json_parse.initial_error", error=str(e), raw_length=len(raw))
 
     # Try to find the first {...} block
     match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     if match:
-        return json.loads(match.group(0))
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError as e:
+            log.debug("json_parse.regex_extract_error", error=str(e))
 
-    raise json.JSONDecodeError("No valid JSON object found", cleaned, 0)
+    # Fix common JSON issues: trailing commas, unquoted keys, single quotes
+    fixed = _fix_common_json_issues(cleaned)
+    if fixed != cleaned:
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError as e:
+            log.debug("json_parse.fixed_still_invalid", error=str(e))
+
+    raise json.JSONDecodeError("No valid JSON object found after repairs", cleaned, 0)
+
+
+def _fix_common_json_issues(text: str) -> str:
+    """
+    Attempt to fix common JSON formatting issues from LLM output.
+    """
+    import re as regex
+
+    # Remove trailing commas before } or ]
+    fixed = regex.sub(r",(\s*[}\]])", r"\1", text)
+
+    # Replace single quotes with double quotes (simple case)
+    # Only if it doesn't break the JSON structure
+    if "'" in fixed and '"' not in fixed:
+        fixed = fixed.replace("'", '"')
+
+    # Fix unquoted boolean/null values that might have weird casing
+    fixed = regex.sub(r":\s*(True|False|None)\s*([,}\]])",
+                      lambda m: f": {m.group(1).lower()}{m.group(2)}",
+                      fixed, flags=regex.IGNORECASE)
+
+    return fixed

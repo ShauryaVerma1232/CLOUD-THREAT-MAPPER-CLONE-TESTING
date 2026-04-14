@@ -155,3 +155,80 @@ def insert_attack_paths(scan_job_id: str, paths: list) -> int:
             cursor.close()
 
     return inserted
+
+
+def insert_blast_radius_result(
+    scan_job_id: str,
+    compromised_node_id: str,
+    result_data: dict,
+) -> str:
+    """
+    Insert a blast radius calculation result into PostgreSQL.
+
+    Returns:
+        The ID of the inserted blast_radius row (UUID string)
+    """
+    import uuid as uuid_mod
+    from psycopg2.extras import Json
+
+    result_id = str(uuid_mod.uuid4())
+    engine = get_sync_engine()
+
+    with engine.connect() as conn:
+        raw_conn = conn.connection
+        cursor = raw_conn.cursor()
+
+        row = (
+            result_id,
+            scan_job_id,
+            compromised_node_id,
+            result_data.get("compromised_node_type", ""),
+            result_data.get("compromised_node_label", ""),
+            Json(result_data.get("direct_reach", [])),
+            result_data.get("direct_reach_count", 0),
+            Json(result_data.get("secondary_reach", [])),
+            result_data.get("secondary_reach_count", 0),
+            Json(result_data.get("all_reachable", [])),
+            result_data.get("total_reachable_count", 0),
+            Json(result_data.get("critical_at_risk", [])),
+            result_data.get("critical_count", 0),
+            Json(result_data.get("by_hop_distance", {})),
+            result_data.get("blast_radius_severity", "low"),
+            float(result_data.get("blast_radius_score", 0.0)),
+            Json(result_data.get("attack_paths_from_here", [])),
+            datetime.now(timezone.utc),
+        )
+
+        try:
+            cursor.execute(
+                """
+                INSERT INTO blast_radius (
+                    id, scan_job_id, compromised_node_id,
+                    compromised_node_type, compromised_node_label,
+                    direct_reach, direct_reach_count,
+                    secondary_reach, secondary_reach_count,
+                    all_reachable, total_reachable_count,
+                    critical_at_risk, critical_count,
+                    by_hop_distance,
+                    blast_radius_severity, blast_radius_score,
+                    attack_paths_from_here,
+                    created_at
+                ) VALUES (%s, %s::uuid, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                row,
+            )
+            raw_conn.commit()
+            log.info(
+                "db.blast_radius_inserted",
+                result_id=result_id,
+                scan_job_id=scan_job_id,
+                compromised_node=compromised_node_id,
+            )
+        except Exception as e:
+            raw_conn.rollback()
+            log.error("db.blast_radius_insert_error", error=str(e))
+            raise
+        finally:
+            cursor.close()
+
+    return result_id

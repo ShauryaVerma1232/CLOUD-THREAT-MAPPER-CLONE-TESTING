@@ -188,7 +188,13 @@ async def _write_attack_paths(
                 exploitability_score: $exploitability_score,
                 exposure_score:       $exposure_score,
                 hop_count:            $hop_count,
-                validated:            false
+                validated:            false,
+                ai_explanation:       null,
+                ai_remediation:       null,
+                ai_privilege_escalation: null,
+                ai_escalation_techniques: null,
+                ai_true_risk_assessment: null,
+                ai_remediation_priority: null
             })
             """,
             path_id=path_id,
@@ -299,17 +305,70 @@ async def get_attack_paths_for_scan(
                p.exploitability_score AS exploitability_score,
                p.exposure_score AS exposure_score,
                p.hop_count AS hop_count,
-               p.validated AS validated
+               p.validated AS validated,
+               p.ai_explanation AS ai_explanation,
+               p.ai_remediation AS ai_remediation,
+               p.ai_iam_detected AS ai_iam_detected,
+               p.ai_iam_techniques AS ai_escalation_techniques,
+               p.ai_iam_technique_count AS ai_technique_count,
+               p.ai_true_risk_assessment AS ai_true_risk_assessment,
+               p.ai_remediation_priority AS ai_remediation_priority
         ORDER BY p.risk_score DESC
         """,
         scan_job_id=scan_job_id,
     )
     paths = []
     async for record in result:
-        paths.append(dict(record))
+        path_data = dict(record)
+
+        # Parse techniques from JSON string
+        techniques_str = path_data.get("ai_escalation_techniques")
+        if techniques_str:
+            try:
+                techniques = json.loads(techniques_str)
+            except Exception:
+                techniques = []
+        else:
+            techniques = []
+        path_data["ai_escalation_techniques"] = techniques
+
+        # Build ai_privilege_escalation dict for schema compatibility
+        detected = path_data.get("ai_iam_detected", "false") == "true"
+        path_data["ai_privilege_escalation"] = {
+            "detected": detected,
+            "technique_count": path_data.get("ai_technique_count", 0),
+            "true_risk_assessment": path_data.get("ai_true_risk_assessment", ""),
+            "remediation_priority": path_data.get("ai_remediation_priority", "normal"),
+        } if detected else None
+
+        paths.append(path_data)
     return paths
 
 
 def _chunks(lst: list, n: int):
     for i in range(0, len(lst), n):
         yield lst[i : i + n]
+
+
+async def update_attack_path_iam_analysis(
+    session: Neo4jSession,
+    scan_job_id: str,
+    path_string: str,
+    iam_analysis: dict,
+) -> None:
+    """Update an attack path with IAM privilege escalation analysis results."""
+    await session.run(
+        """
+        MATCH (p:AttackPath {scan_job_id: $scan_job_id, path_string: $path_string})
+        SET p.ai_privilege_escalation = $iam_analysis,
+            p.ai_escalation_techniques = $techniques,
+            p.ai_true_risk_assessment = $risk_assessment,
+            p.ai_remediation_priority = $priority
+        """,
+        scan_job_id=scan_job_id,
+        path_string=path_string,
+        iam_analysis=iam_analysis,
+        techniques=iam_analysis.get("escalation_techniques", []),
+        risk_assessment=iam_analysis.get("true_risk_assessment", ""),
+        priority=iam_analysis.get("remediation_priority", "normal"),
+    )

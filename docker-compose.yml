@@ -40,7 +40,7 @@ services:
       timeout: 5s
       retries: 5
     ports:
-      - "127.0.0.1:5432:5432"  # localhost only
+      - "127.0.0.1:15432:5432"  # localhost only (15432 to avoid conflict with local PostgreSQL)
 
   # ── Neo4j ───────────────────────────────────────────────────────────────────
   neo4j:
@@ -64,8 +64,8 @@ services:
       timeout: 10s
       retries: 5
     ports:
-      - "127.0.0.1:7474:7474"  # Neo4j browser (localhost only)
-      - "127.0.0.1:7687:7687"  # Bolt protocol (localhost only)
+      - "127.0.0.1:17474:7474"  # Neo4j browser (localhost only, 17474 to avoid conflicts)
+      - "127.0.0.1:17687:7687"  # Bolt protocol (localhost only, 17687 to avoid conflicts)
 
   # ── Redis ───────────────────────────────────────────────────────────────────
   redis:
@@ -83,7 +83,7 @@ services:
       timeout: 5s
       retries: 5
     ports:
-      - "127.0.0.1:6379:6379"  # localhost only
+      - "127.0.0.1:16379:6379"  # localhost only (16379 to avoid conflict with local Redis)
 
   # ── Backend (FastAPI) ───────────────────────────────────────────────────────
   backend:
@@ -114,7 +114,7 @@ services:
       neo4j:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:18000:8000"  # localhost only (18000 to avoid conflict with other services)
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   # ── Worker (Celery) ─────────────────────────────────────────────────────────
@@ -139,7 +139,7 @@ services:
       - terraform_state:/app/terraform_state
       - reports:/app/reports
       # AWS credentials (read-only mount)
-      - ${AWS_CONFIG_DIR:-~/.aws}:/root/.aws:ro
+      - ~/.aws:/root/.aws:ro
     networks:
       - backend_net
     depends_on:
@@ -175,8 +175,10 @@ services:
       dockerfile: Dockerfile
     container_name: tm_frontend
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Allow frontend container to reach backend on host
     environment:
-      VITE_API_URL: http://localhost:8000
+      VITE_API_URL: http://host.docker.internal:18000
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -185,5 +187,5 @@ services:
     depends_on:
       - backend
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:13000:3000"  # localhost only (13000 to avoid conflict with other dev servers)
     command: npm run dev -- --host 0.0.0.0 --port 3000

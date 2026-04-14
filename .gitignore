@@ -81,3 +81,36 @@ claude.md
 
 # Documentation (study guides, demo prep - not core code)
 docs/
+
+# Research materials (personal analysis, not project code)
+docs/research/
+
+# Cleanup scripts (personal operational scripts)
+cleanup_*.ps1
+cleanup_*.sh
+
+# Debug / development scripts
+debug_graph.py
+
+# Research generation scripts (personal workflow)
+generate_research_aspect.py
+research_aspect.md
+
+# AWS CLI installer (downloaded binary, use package manager instead)
+awscliv2.zip
+
+# Aider history (personal chat history)
+.aider.chat.history.md
+.aider.input.history
+
+# Example env should be kept, but ensure real .env is ignored
+!.env.example
+
+# Test scripts (adhoc testing, not formal test suite)
+backend/test_api.py
+backend/test_schema.py
+
+# PowerPoint exports (personal research materials)
+ppt/
+*.pptx
+*.ppt

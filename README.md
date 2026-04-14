@@ -88,11 +88,11 @@ Open these in your browser:
 
 | URL | What you should see |
 |-----|-------------------|
-| http://localhost:3000 | Threat Mapper dashboard (React app) |
-| http://localhost:8000/docs | FastAPI Swagger UI |
-| http://localhost:8000/health | `{"status": "ok"}` |
-| http://localhost:8000/health/ready | All checks green |
-| http://localhost:7474 | Neo4j browser (login: neo4j / your password) |
+| http://localhost:13000 | Threat Mapper dashboard (React app) |
+| http://localhost:18000/docs | FastAPI Swagger UI |
+| http://localhost:18000/health | `{"status": "ok"}` |
+| http://localhost:18000/health/ready | All checks green |
+| http://localhost:17474 | Neo4j browser (login: neo4j / your password) |
 
 ---
 

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo } from 'react'
+import { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import cytoscape from 'cytoscape'
@@ -9,8 +9,8 @@ import CytoscapeComponent from 'react-cytoscapejs'
 cytoscape.use(fcose)
 cytoscape.use(dagre)
 
-import { AlertTriangle, X, Layers, ZoomIn, ZoomOut, Maximize, Eye, EyeOff, Box, Target, ShieldAlert, ChevronRight } from 'lucide-react'
-import { graphApi, type CyNode, type AttackPath } from '../api/scanApi'
+import { AlertTriangle, X, Layers, ZoomIn, ZoomOut, Maximize, Eye, EyeOff, Box, Target, ShieldAlert, ChevronRight, Radio, Network, Lock, Unlock, FileText, Zap, CheckCircle, Download, Play, Pause, StepForward } from 'lucide-react'
+import { graphApi, blastRadiusApi, aiApi, type CyNode, type AttackPath, type BlastRadiusResult, type AISummary } from '../api/scanApi'
 import clsx from 'clsx'
 
 const NODE_COLORS: Record<string, string> = {
@@ -186,12 +186,41 @@ const CY_STYLESHEET = [
       'line-style': 'solid',
     },
   },
+  // Enhanced attack path edge (for research visualization)
+  {
+    selector: 'edge.attack-path-edge-highlight',
+    style: {
+      width: 6,
+      'line-color': '#DC2626',
+      'target-arrow-color': '#DC2626',
+      'line-opacity': 1,
+      'line-style': 'solid',
+      'target-arrow-shape': 'triangle',
+      'arrow-scale': 1.5,
+    },
+  },
+  // Attack path node highlighting
   {
     selector: 'node.attack-path-node',
     style: {
-      'border-width': 6,
+      'border-width': 8,
       'border-color': '#EF4444',
       'border-opacity': 1,
+      'background-opacity': 1,
+      'z-index': 10,
+    },
+  },
+  // Current step in animation (pulsing effect)
+  {
+    selector: 'node.path-step-current',
+    style: {
+      'border-color': '#FCD34D',
+      'border-width': 10,
+      'background-color': '#FDE047',
+      'background-opacity': 0.3,
+      'shadow-color': '#FCD34D',
+      'shadow-blur': 20,
+      'shadow-opacity': 0.8,
     },
   },
   {
@@ -199,6 +228,26 @@ const CY_STYLESHEET = [
     style: {
       'line-style': 'dashed',
       'line-color': '#64748b',
+    },
+  },
+  // Blast radius highlighting
+  {
+    selector: 'node.blast-radius-reachable',
+    style: {
+      'border-color': '#F59E0B',
+      'border-width': 4,
+      'border-opacity': 1,
+      'background-opacity': 0.7,
+    },
+  },
+  {
+    selector: 'node.blast-radius-critical',
+    style: {
+      'border-color': '#EF4444',
+      'border-width': 6,
+      'border-opacity': 1,
+      'border-style': 'dashed',
+      'background-opacity': 0.8,
     },
   },
 ]
@@ -252,6 +301,14 @@ function truncateLabel(label: string, maxLength = 20): string {
   return label
 }
 
+// Check if a resource is a CloudGoat resource
+function isCloudGoatResource(nodeId: string, nodeType?: string): boolean {
+  // CloudGoat resources typically have names starting with 'cg-' or 'cg_'
+  const cloudGoatPrefixes = ['cg-', 'cg_', 'shepard', 'solus', 'wrex', 'jacktheripper']
+  const lowerId = nodeId.toLowerCase()
+  return cloudGoatPrefixes.some(prefix => lowerId.startsWith(prefix) || lowerId.includes(prefix))
+}
+
 export default function GraphPage() {
   const [searchParams] = useSearchParams()
   const scanId = searchParams.get('scan') ?? ''
@@ -263,6 +320,38 @@ export default function GraphPage() {
   const [zoomLevel, setZoomLevel] = useState(1)
   const [clusterMode, setClusterMode] = useState(true) // BloodHound-style clustering
   const [selectedAttackPath, setSelectedAttackPath] = useState<AttackPath | null>(null)
+
+  // Blast radius state
+  const [blastRadiusResult, setBlastRadiusResult] = useState<BlastRadiusResult | null>(null)
+  const [blastRadiusLoading, setBlastRadiusLoading] = useState(false)
+  const [showBlastRadiusPanel, setShowBlastRadiusPanel] = useState(false)
+
+  // AI Report state
+  const [aiSummary, setAiSummary] = useState<AISummary | null>(null)
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false)
+  const [showAiReportPanel, setShowAiReportPanel] = useState(false)
+  const [aiReportTab, setAiReportTab] = useState<'summary' | 'quick-wins' | 'rankings'>('summary')
+
+  // Track if user manually closed the attack path panel (prevents auto-reselect)
+  const userClosedAttackPathRef = useRef(false)
+
+  // Environment filter state
+  const [showOnlyCloudGoat, setShowOnlyCloudGoat] = useState(false)
+
+  // Attack path animation state
+  const [animatedPath, setAnimatedPath] = useState<AttackPath | null>(null)
+  const [animationPlaying, setAnimationPlaying] = useState(false)
+  const [currentStep, setCurrentStep] = useState(0)
+
+  // Fetch scan details for header
+  const { data: scanDetails } = useQuery({
+    queryKey: ['scan-details', scanId],
+    enabled: !!scanId,
+    queryFn: () => graphApi.getGraph(scanId).then(() =>
+      fetch(`http://localhost:18000/scans/${scanId}`).then(r => r.json())
+    ),
+    staleTime: Infinity,
+  })
 
   const { data: graphData, isLoading, error: graphError } = useQuery({
     queryKey: ['graph', scanId],
@@ -286,6 +375,37 @@ export default function GraphPage() {
     staleTime: Infinity,
     queryFn: () => graphApi.getPaths(scanId).then(r => r.data),
   })
+
+  // Auto-highlight the first (most critical) attack path when data loads
+  useEffect(() => {
+    if (attackPathsData?.items && attackPathsData.items.length > 0 && !selectedAttackPath && !userClosedAttackPathRef.current && cyRef.current) {
+      const topPath = attackPathsData.items[0] // Already sorted by risk_score desc
+      setSelectedAttackPath(topPath)
+      // Small delay to ensure graph is rendered
+      setTimeout(() => {
+        if (cyRef.current) {
+          highlightAttackPath(topPath, false)
+        }
+      }, 500)
+    }
+  }, [attackPathsData?.items, selectedAttackPath])
+
+  // Fetch AI Summary when panel is opened
+  const fetchAiSummary = useCallback(async () => {
+    if (!scanId || aiSummaryLoading || aiSummary) return
+    setAiSummaryLoading(true)
+    try {
+      const result = await aiApi.getSummary(scanId)
+      if (result.data) {
+        setAiSummary(result.data)
+        setShowAiReportPanel(true)
+      }
+    } catch (error) {
+      console.error('Failed to fetch AI summary:', error)
+    } finally {
+      setAiSummaryLoading(false)
+    }
+  }, [scanId, aiSummaryLoading, aiSummary])
 
 
   const handleCyInit = useCallback((cy: any) => {
@@ -311,36 +431,192 @@ export default function GraphPage() {
     })
   }, [])
 
-  // Highlight attack path in the graph
-  const highlightAttackPath = useCallback((path: AttackPath) => {
+  // Highlight attack path in the graph with enhanced visualization
+  const highlightAttackPath = useCallback((path: AttackPath, enableAnimation = false) => {
     if (!cyRef.current) return
 
     // Clear previous highlights
-    cyRef.current.elements().removeClass('attack-path attack-path-node')
+    cyRef.current.elements().removeClass('attack-path attack-path-node attack-path-edge-highlight')
 
-    // Extract node IDs from path string or path_nodes if available
+    // Extract node IDs from path string, removing "User:", "Role:", etc. prefixes
     const pathParts = path.path_string.split(' → ')
-    const nodeIds = pathParts.map(p => p.trim())
+    const nodeLabels = pathParts.map(p => {
+      const trimmed = p.trim()
+      // Remove prefixes like "User:", "Role:", "EC2:", etc.
+      const withoutPrefix = trimmed.replace(/^(User|Role|EC2|S3|RDS|Lambda|VPC|Subnet|SecurityGroup):\s*/i, '')
+      return withoutPrefix
+    })
 
-    // Highlight nodes in the path
-    nodeIds.forEach(label => {
-      const node = cyRef.current.nodes().filter((n: any) => n.data('label')?.includes(label))
+    // Find and highlight nodes in the path
+    const highlightedNodes: any[] = []
+    nodeLabels.forEach((label, index) => {
+      // Try exact match first, then partial match
+      let node = cyRef.current.nodes().filter((n: any) => n.data('label') === label)
+      if (node.length === 0) {
+        node = cyRef.current.nodes().filter((n: any) => n.data('label')?.includes(label))
+      }
+      // Fallback: try matching by node ID
+      if (node.length === 0) {
+        node = cyRef.current.nodes().filter((n: any) => n.data('id')?.includes(label))
+      }
+
       if (node.length > 0) {
         node.addClass('attack-path-node')
+        highlightedNodes.push(node[0])
+
+        // Add step number badge (for research visualization)
+        node.data('stepNumber', index + 1)
       }
     })
 
+    // Highlight edges between path nodes
+    for (let i = 0; i < highlightedNodes.length - 1; i++) {
+      const source = highlightedNodes[i]
+      const target = highlightedNodes[i + 1]
+      const edge = cyRef.current.edges().filter((e: any) =>
+        e.data('source') === source.data('id') && e.data('target') === target.data('id')
+      )
+      if (edge.length > 0) {
+        edge.addClass('attack-path-edge-highlight')
+        edge.data('pathEdge', true)
+      }
+    }
+
     // Fit the view to show the path
-    if (nodeIds.length > 0) {
-      const nodesToHighlight = cyRef.current.nodes('.attack-path-node')
-      if (nodesToHighlight.length > 0) {
-        cyRef.current.animate({
-          fit: { eles: nodesToHighlight, padding: 50 },
-          duration: 500
-        })
+    if (highlightedNodes.length > 0) {
+      cyRef.current.animate({
+        fit: { eles: cyRef.current.nodes('.attack-path-node'), padding: 80 },
+        duration: 800,
+        easing: 'ease-in-out'
+      })
+
+      // Start step-by-step animation if enabled
+      if (enableAnimation) {
+        setAnimatedPath(path)
+        setAnimationPlaying(true)
+        setCurrentStep(0)
+        animatePathStep(highlightedNodes, 0)
       }
     }
   }, [])
+
+  // Animate path step-by-step (for research presentations)
+  const animatePathStep = (nodes: any[], step: number) => {
+    if (!cyRef.current || step >= nodes.length) {
+      setAnimationPlaying(false)
+      return
+    }
+
+    // Pulse effect on current node
+    const node = nodes[step]
+    cyRef.current.elements().removeClass('path-step-current')
+    node.addClass('path-step-current')
+
+    // Zoom to current step
+    cyRef.current.animate({
+      fit: { eles: node, padding: 100 },
+      duration: 600
+    })
+
+    setCurrentStep(step + 1)
+
+    // Continue to next step after delay
+    if (step < nodes.length - 1) {
+      setTimeout(() => {
+        if (animationPlaying) {
+          animatePathStep(nodes, step + 1)
+        }
+      }, 2000) // 2 seconds per step
+    } else {
+      setTimeout(() => {
+        cyRef.current.elements().removeClass('path-step-current')
+        setAnimationPlaying(false)
+      }, 2000)
+    }
+  }
+
+  // Stop animation
+  const stopAnimation = useCallback(() => {
+    setAnimationPlaying(false)
+    setAnimatedPath(null)
+    setCurrentStep(0)
+    if (cyRef.current) {
+      cyRef.current.elements().removeClass('path-step-current')
+    }
+  }, [])
+
+  // Export graph as PNG (for research paper)
+  const exportGraphAsPng = useCallback((filename = 'attack-path.png') => {
+    if (!cyRef.current) return
+
+    const pngData = cyRef.current.png({
+      full: true,
+      bg: '#0f172a',
+      scale: 2 // High resolution for papers
+    })
+
+    const link = document.createElement('a')
+    link.download = filename
+    link.href = pngData
+    link.click()
+  }, [])
+
+  // Blast radius calculation
+  const calculateBlastRadius = useCallback(async (nodeId: string) => {
+    if (!scanId) return
+
+    setBlastRadiusLoading(true)
+    try {
+      // First trigger the calculation
+      await blastRadiusApi.triggerCalculation(scanId, nodeId, 4, true)
+
+      // Poll for results (simple polling every 1s for up to 30s)
+      for (let i = 0; i < 30; i++) {
+        try {
+          const result = await blastRadiusApi.getResult(scanId, nodeId)
+          if (result.data) {
+            setBlastRadiusResult(result.data)
+            setShowBlastRadiusPanel(true)
+
+            // Highlight reachable nodes in the graph
+            if (cyRef.current) {
+              cyRef.current.elements().removeClass('blast-radius-reachable blast-radius-critical')
+              const allReachable = result.data.all_reachable || []
+              const criticalIds = new Set((result.data.critical_at_risk || []).map(c => c.node_id))
+
+              allReachable.forEach((rid: string) => {
+                const node = cyRef.current.nodes().filter((n: any) => n.data('id') === rid)
+                if (node.length > 0) {
+                  if (criticalIds.has(rid)) {
+                    node.addClass('blast-radius-critical')
+                  } else {
+                    node.addClass('blast-radius-reachable')
+                  }
+                }
+              })
+
+              // Fit view to show affected area
+              const reachableNodes = cyRef.current.nodes('.blast-radius-reachable, .blast-radius-critical')
+              if (reachableNodes.length > 0) {
+                cyRef.current.animate({
+                  fit: { eles: reachableNodes, padding: 50 },
+                  duration: 500
+                })
+              }
+            }
+            break
+          }
+        } catch {
+          // Result not ready yet, wait and retry
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
+    } catch (error) {
+      console.error('Blast radius calculation failed:', error)
+    } finally {
+      setBlastRadiusLoading(false)
+    }
+  }, [scanId])
 
   /* MEMOIZED ELEMENTS TO PREVENT RE-RENDER GRAPH RESET */
   const elements = useMemo(() => {
@@ -363,6 +639,11 @@ export default function GraphPage() {
       const nodeType = node?.data?.node_type
       if (!nodeId) continue
 
+      // Skip non-CloudGoat resources if filter is enabled
+      if (showOnlyCloudGoat && !isCloudGoatResource(nodeId, nodeType)) {
+        continue
+      }
+
       if (nodeType === 'VPC' && !defaultVpcId) {
         defaultVpcId = nodeId
       } else if (nodeType === 'SUBNET' && !defaultSubnetId) {
@@ -375,6 +656,11 @@ export default function GraphPage() {
     for (const node of (graphData.nodes ?? [])) {
       const nodeId = node?.data?.id
       if (!nodeId || nodeMap.has(nodeId)) continue
+
+      // Skip non-CloudGoat resources if filter is enabled
+      if (showOnlyCloudGoat && !isCloudGoatResource(nodeId, node?.data?.node_type)) {
+        continue
+      }
 
       const nodeType = node?.data?.node_type
       const rawLabel = node?.data?.label ?? nodeId ?? 'Unknown'
@@ -406,7 +692,7 @@ export default function GraphPage() {
       nodeMap.set(nodeId, { data: nodeData })
     }
 
-    // Deduplicate edges by source-target pair
+    // Deduplicate edges by source-target pair (only include edges between visible nodes)
     const edgeMap = new Map<string, any>()
     let edgeId = 0
     for (const edge of (graphData.edges ?? [])) {
@@ -414,6 +700,11 @@ export default function GraphPage() {
       const target = edge?.data?.target
       const edgeType = edge?.data?.edge_type
       if (!source || !target) continue
+
+      // Skip edges connected to filtered-out nodes
+      if (showOnlyCloudGoat && (!isCloudGoatResource(source) || !isCloudGoatResource(target))) {
+        continue
+      }
 
       const key = `${source}-${target}-${edgeType}`
       if (edgeMap.has(key)) continue
@@ -430,9 +721,9 @@ export default function GraphPage() {
     }
 
     const result = [...Array.from(nodeMap.values()), ...Array.from(edgeMap.values())]
-    console.log('[GraphPage] Rendered graph with', nodeMap.size, 'nodes,', edgeMap.size, 'edges')
+    console.log('[GraphPage] Rendered graph with', nodeMap.size, 'nodes,', edgeMap.size, 'edges', showOnlyCloudGoat ? '(CloudGoat only)' : '(all resources)')
     return result
-  }, [graphData, clusterMode]) // Re-compute when clusterMode changes
+  }, [graphData, clusterMode, showOnlyCloudGoat]) // Re-compute when clusterMode or filter changes
 
   if (!scanId) {
     return (
@@ -477,6 +768,40 @@ export default function GraphPage() {
   return (
     <div className="flex h-full">
       <div className="flex-1 relative bg-slate-950">
+
+        {/* Header - Environment Info */}
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20">
+          <div className="bg-slate-900/90 backdrop-blur rounded-lg border border-slate-700 px-4 py-2.5 shadow-xl flex items-center gap-3">
+            {scanDetails?.aws_profile === 'cloudgoat-vulnerable' ? (
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-red-400 bg-red-400/10 px-2 py-1 rounded border border-red-400/20">
+                <ShieldAlert size={12} />
+                🔴 CloudGoat Environment
+              </span>
+            ) : scanDetails?.aws_profile === 'threatmapper-readonly' ? (
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-400 bg-blue-400/10 px-2 py-1 rounded border border-blue-400/20">
+                <ShieldAlert size={12} />
+                🔵 Production Environment
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-400 bg-slate-800 px-2 py-1 rounded border border-slate-700">
+                <ShieldAlert size={12} />
+                ⚪ {scanDetails?.aws_profile || 'Unknown'} Environment
+              </span>
+            )}
+            <div className="h-4 w-px bg-slate-700" />
+            <span className="text-xs text-slate-400 font-mono">
+              {scanDetails?.aws_region || 'us-east-1'}
+            </span>
+            {scanDetails?.aws_account_id && (
+              <>
+                <div className="h-4 w-px bg-slate-700" />
+                <span className="text-xs text-slate-500 font-mono">
+                  {scanDetails.aws_account_id}
+                </span>
+              </>
+            )}
+          </div>
+        </div>
 
         {isLoading && (
           <div className="absolute inset-0 flex items-center justify-center">
@@ -547,6 +872,20 @@ export default function GraphPage() {
                 {clusterMode ? 'ON' : 'OFF'}
               </button>
             </div>
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <span className="text-xs font-medium text-slate-400">CloudGoat only</span>
+              <button
+                onClick={() => setShowOnlyCloudGoat(!showOnlyCloudGoat)}
+                className={clsx(
+                  'text-xs px-2 py-0.5 rounded transition-colors',
+                  showOnlyCloudGoat
+                    ? 'bg-purple-400/20 text-purple-400 border border-purple-400/30'
+                    : 'bg-slate-800 text-slate-400 border border-slate-700'
+                )}
+              >
+                {showOnlyCloudGoat ? 'ON' : 'OFF'}
+              </button>
+            </div>
             <div className="text-xs text-slate-500">Zoom: {(zoomLevel * 100).toFixed(0)}%</div>
           </div>
         </div>
@@ -598,45 +937,58 @@ export default function GraphPage() {
                   <Target size={16} className="text-red-400" />
                   <h3 className="text-sm font-semibold text-white">Attack Paths</h3>
                 </div>
-                <span className="text-xs text-slate-400">{attackPathsData.items.length} found</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-400">{attackPathsData.items.length} found</span>
+                  <button
+                    onClick={() => exportGraphAsPng(`attack-path-${scanId}.png`)}
+                    className="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors"
+                    title="Export as PNG"
+                  >
+                    <Download size={14} />
+                  </button>
+                </div>
               </div>
               <div className="space-y-2">
                 {attackPathsData.items.map((path, idx) => (
-                  <button
-                    key={path.path_id}
-                    onClick={() => {
-                      setSelectedAttackPath(path === selectedAttackPath ? null : path)
-                      if (path !== selectedAttackPath) {
-                        highlightAttackPath(path)
-                      } else {
-                        cyRef.current?.elements().removeClass('attack-path attack-path-node')
-                      }
-                    }}
-                    className={clsx(
-                      'w-full text-left p-2 rounded-lg border transition-colors',
-                      selectedAttackPath?.path_id === path.path_id
-                        ? 'bg-red-400/20 border-red-400/30'
-                        : 'bg-slate-800/50 border-slate-700 hover:bg-slate-800'
-                    )}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className={clsx(
-                        'text-xs font-bold px-1.5 py-0.5 rounded',
-                        path.severity === 'critical' ? 'bg-red-400/20 text-red-400' :
-                        path.severity === 'high' ? 'bg-orange-400/20 text-orange-400' :
-                        path.severity === 'medium' ? 'bg-amber-400/20 text-amber-400' :
-                        'bg-slate-700 text-slate-400'
-                      )}>
-                        {path.severity}
-                      </span>
-                      <span className="text-xs font-mono text-slate-400">
-                        Risk: {path.risk_score.toFixed(1)}
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-300 font-mono truncate" title={path.path_string}>
-                      {path.path_string}
-                    </p>
-                  </button>
+                  <div key={path.path_id} className="space-y-2">
+                    <button
+                      onClick={() => {
+                        if (path !== selectedAttackPath) {
+                          userClosedAttackPathRef.current = false
+                          setSelectedAttackPath(path)
+                          highlightAttackPath(path, false)
+                        } else {
+                          userClosedAttackPathRef.current = true
+                          setSelectedAttackPath(null)
+                          cyRef.current?.elements().removeClass('attack-path attack-path-node attack-path-edge-highlight')
+                        }
+                      }}
+                      className={clsx(
+                        'w-full text-left p-2 rounded-lg border transition-colors',
+                        selectedAttackPath?.path_id === path.path_id
+                          ? 'bg-red-400/20 border-red-400/30'
+                          : 'bg-slate-800/50 border-slate-700 hover:bg-slate-800'
+                      )}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className={clsx(
+                          'text-xs font-bold px-1.5 py-0.5 rounded',
+                          path.severity === 'critical' ? 'bg-red-400/20 text-red-400' :
+                          path.severity === 'high' ? 'bg-orange-400/20 text-orange-400' :
+                          path.severity === 'medium' ? 'bg-amber-400/20 text-amber-400' :
+                          'bg-slate-700 text-slate-400'
+                        )}>
+                          {path.severity}
+                        </span>
+                        <span className="text-xs font-mono text-slate-400">
+                          Risk: {path.risk_score.toFixed(1)}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-300 font-mono truncate" title={path.path_string}>
+                        {path.path_string}
+                      </p>
+                    </button>
+                  </div>
                 ))}
               </div>
             </div>
@@ -660,26 +1012,41 @@ export default function GraphPage() {
           </div>
         )}
 
-        {/* Attack Path Detail Panel */}
+        {/* Attack Path Detail Panel - Right side, below AI Report panel */}
         {selectedAttackPath && (
-          <div className="absolute top-20 right-4 z-10 w-96 max-h-[60vh] overflow-y-auto">
-            <div className="bg-slate-900/90 backdrop-blur rounded-lg border border-red-400/30 p-4 shadow-xl">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <Target size={16} className="text-red-400" />
-                  <h3 className="text-sm font-semibold text-white">Attack Path Detail</h3>
-                </div>
-                <button
-                  onClick={() => {
-                    setSelectedAttackPath(null)
-                    cyRef.current?.elements().removeClass('attack-path attack-path-node')
-                  }}
-                  className="text-slate-400 hover:text-white transition-colors"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-              <div className="space-y-3">
+          <div className="absolute top-24 right-4 z-50 w-96">
+            <div className="bg-slate-900/95 backdrop-blur rounded-lg border border-red-400/30 shadow-2xl" style={{ maxHeight: 'calc(100vh - 12rem)', overflowY: 'auto' }}>
+              {/* Close button */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
+                  setSelectedAttackPath(null)
+                  if (cyRef.current) {
+                    cyRef.current.elements().removeClass('attack-path attack-path-node attack-path-edge-highlight')
+                  }
+                }}
+                className="absolute top-3 right-3"
+                style={{
+                  zIndex: 100,
+                  pointerEvents: 'auto',
+                  color: '#94a3b8',
+                  padding: '4px',
+                  borderRadius: '4px'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = '#fff'
+                  e.currentTarget.style.backgroundColor = '#1e293b'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = '#94a3b8'
+                  e.currentTarget.style.backgroundColor = 'transparent'
+                }}
+                title="Close"
+              >
+                <X size={20} strokeWidth={2.5} />
+              </button>
+              <div className="p-4 pt-10 space-y-3">
                 {/* Severity and Risk */}
                 <div className="flex items-center gap-2">
                   <span className={clsx(
@@ -738,6 +1105,8 @@ export default function GraphPage() {
                   <span>Hops:</span>
                   <span className="text-white font-mono">{selectedAttackPath.hop_count}</span>
                 </div>
+
+                {/* Step-by-Step Walkthrough - Removed to reduce panel height */}
               </div>
             </div>
           </div>
@@ -777,10 +1146,347 @@ export default function GraphPage() {
                     <span className="text-xs font-medium">Publicly Exposed</span>
                   </div>
                 )}
+                {/* Blast Radius Action */}
+                <div className="pt-3 mt-3 border-t border-slate-700">
+                  <button
+                    onClick={() => calculateBlastRadius(selectedNode.id)}
+                    disabled={blastRadiusLoading}
+                    className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-orange-500/20 hover:bg-orange-500/30 border border-orange-400/30 rounded-lg text-orange-400 hover:text-orange-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {blastRadiusLoading ? (
+                      <>
+                        <Radio size={16} className="animate-spin" />
+                        <span className="text-xs font-medium">Calculating...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Network size={16} />
+                        <span className="text-xs font-medium">Calculate Blast Radius</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         )}
+
+        {/* Blast Radius Results Panel */}
+        {showBlastRadiusPanel && blastRadiusResult && (
+          <div className="absolute top-4 right-4 z-10 w-[420px] max-h-[80vh] overflow-y-auto">
+            <div className="bg-slate-900/90 backdrop-blur rounded-lg border border-orange-400/30 p-4 shadow-xl">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Radio size={18} className="text-orange-400" />
+                  <h3 className="text-sm font-semibold text-white">Blast Radius Analysis</h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      cyRef.current?.elements().removeClass('blast-radius-reachable blast-radius-critical')
+                      setShowBlastRadiusPanel(false)
+                      setBlastRadiusResult(null)
+                    }}
+                    className="text-slate-400 hover:text-white transition-colors"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Compromised Node Info */}
+              <div className="p-3 bg-orange-400/10 border border-orange-400/20 rounded-lg mb-3">
+                <p className="text-xs text-orange-400 font-medium mb-1">If this node is compromised:</p>
+                <p className="text-sm text-white font-mono">{blastRadiusResult.compromised_node_label}</p>
+                <p className="text-xs text-slate-400">{blastRadiusResult.compromised_node_type}</p>
+              </div>
+
+              {/* Summary Stats */}
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                <div className="p-2 bg-slate-800 rounded-lg text-center">
+                  <p className="text-xs text-slate-500">Direct</p>
+                  <p className="text-lg font-mono text-white">{blastRadiusResult.direct_reach_count}</p>
+                  <p className="text-xs text-slate-400">1 hop</p>
+                </div>
+                <div className="p-2 bg-slate-800 rounded-lg text-center">
+                  <p className="text-xs text-slate-500">Secondary</p>
+                  <p className="text-lg font-mono text-white">{blastRadiusResult.secondary_reach_count}</p>
+                  <p className="text-xs text-slate-400">2 hops</p>
+                </div>
+                <div className="p-2 bg-slate-800 rounded-lg text-center">
+                  <p className="text-xs text-slate-500">Total</p>
+                  <p className="text-lg font-mono text-white">{blastRadiusResult.total_reachable_count}</p>
+                  <p className="text-xs text-slate-400">resources</p>
+                </div>
+              </div>
+
+              {/* Severity Badge */}
+              <div className="flex items-center justify-between mb-3 p-2 bg-slate-800 rounded-lg">
+                <span className="text-xs text-slate-400">Blast Radius Severity:</span>
+                <span className={
+                  blastRadiusResult.blast_radius_severity === 'critical' ? 'text-xs font-bold px-2 py-1 rounded bg-red-400/20 text-red-400' :
+                  blastRadiusResult.blast_radius_severity === 'high' ? 'text-xs font-bold px-2 py-1 rounded bg-orange-400/20 text-orange-400' :
+                  blastRadiusResult.blast_radius_severity === 'medium' ? 'text-xs font-bold px-2 py-1 rounded bg-amber-400/20 text-amber-400' :
+                  'text-xs font-bold px-2 py-1 rounded bg-slate-700 text-slate-400'
+                }>
+                  {blastRadiusResult.blast_radius_severity.toUpperCase()}
+                </span>
+              </div>
+
+              {/* Critical Resources at Risk */}
+              {blastRadiusResult.critical_count > 0 && (
+                <div className="mb-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Lock size={14} className="text-red-400" />
+                    <span className="text-xs font-medium text-red-400">
+                      Critical Resources at Risk ({blastRadiusResult.critical_count})
+                    </span>
+                  </div>
+                  <div className="space-y-1 max-h-40 overflow-y-auto">
+                    {blastRadiusResult.critical_at_risk.map((crit) => (
+                      <div
+                        key={crit.node_id}
+                        className="p-2 bg-red-400/10 border border-red-400/20 rounded-lg"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-white font-mono truncate" title={crit.node_id}>
+                            {crit.label}
+                          </span>
+                          {crit.is_admin && (
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-red-400/20 text-red-400">
+                              ADMIN
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-400 mt-0.5">{crit.node_type}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Attack Paths from this Node */}
+              {blastRadiusResult.attack_paths_from_here && blastRadiusResult.attack_paths_from_here.length > 0 && (
+                <div className="mb-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Target size={14} className="text-orange-400" />
+                    <span className="text-xs font-medium text-orange-400">
+                      Attack Paths ({blastRadiusResult.attack_paths_from_here.length})
+                    </span>
+                  </div>
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {blastRadiusResult.attack_paths_from_here.slice(0, 5).map((path, idx) => (
+                      <div
+                        key={idx}
+                        className="p-2 bg-slate-800/50 border border-slate-700 rounded-lg"
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className={
+                            path.severity === 'critical' ? 'text-xs font-bold px-1.5 py-0.5 rounded bg-red-400/20 text-red-400' :
+                            path.severity === 'high' ? 'text-xs font-bold px-1.5 py-0.5 rounded bg-orange-400/20 text-orange-400' :
+                            path.severity === 'medium' ? 'text-xs font-bold px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-400' :
+                            'text-xs font-bold px-1.5 py-0.5 rounded bg-slate-700 text-slate-400'
+                          }>
+                            {path.severity}
+                          </span>
+                          <span className="text-xs text-slate-400">
+                            Risk: {path.risk_score.toFixed(1)}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-300 font-mono truncate" title={path.path_string}>
+                          {path.path_string}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {path.hop_count} hops to {path.target_type}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Hop Distance Breakdown */}
+              {blastRadiusResult.by_hop_distance && Object.keys(blastRadiusResult.by_hop_distance).length > 0 && (
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Unlock size={14} className="text-slate-400" />
+                    <span className="text-xs font-medium text-slate-400">Reach by Hop Distance</span>
+                  </div>
+                  <div className="space-y-1">
+                    {Object.entries(blastRadiusResult.by_hop_distance).slice(0, 4).map(([hop, nodes]) => (
+                      <div key={hop} className="flex items-center justify-between text-xs">
+                        <span className="text-slate-500">Hop {hop}:</span>
+                        <span className="text-white font-mono">{nodes.length} resources</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* AI Report Panel - Positioned above attack path panel */}
+        <div className="absolute top-4 right-4 z-20">
+          {/* Toggle button */}
+          {!showAiReportPanel ? (
+            <button
+              onClick={fetchAiSummary}
+              disabled={aiSummaryLoading}
+              className="flex items-center gap-2 px-4 py-2 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/30 rounded-lg text-purple-400 hover:text-purple-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xl"
+            >
+              {aiSummaryLoading ? (
+                <>
+                  <FileText size={16} className="animate-pulse" />
+                  <span className="text-xs font-medium">Loading AI Report...</span>
+                </>
+              ) : (
+                <>
+                  <FileText size={16} />
+                  <span className="text-xs font-medium">View AI Report</span>
+                </>
+              )}
+            </button>
+          ) : (
+            <div className="w-[450px] max-h-[70vh] overflow-y-auto bg-slate-900/90 backdrop-blur rounded-lg border border-purple-400/30 p-4 shadow-xl">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <FileText size={18} className="text-purple-400" />
+                  <h3 className="text-sm font-semibold text-white">AI Security Report</h3>
+                </div>
+                <button
+                  onClick={() => setShowAiReportPanel(false)}
+                  className="text-slate-400 hover:text-white transition-colors p-1 hover:bg-slate-800 rounded"
+                  title="Close report"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Tab Navigation */}
+              <div className="flex gap-1 mb-3 border-b border-slate-700 pb-1">
+                <button
+                  onClick={() => setAiReportTab('summary')}
+                  className={clsx(
+                    'flex-1 text-xs px-2 py-1.5 rounded transition-colors',
+                    aiReportTab === 'summary'
+                      ? 'bg-purple-400/20 text-purple-400 border border-purple-400/30'
+                      : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                  )}
+                >
+                  Executive Summary
+                </button>
+                <button
+                  onClick={() => setAiReportTab('quick-wins')}
+                  className={clsx(
+                    'flex-1 text-xs px-2 py-1.5 rounded transition-colors',
+                    aiReportTab === 'quick-wins'
+                      ? 'bg-emerald-400/20 text-emerald-400 border border-emerald-400/30'
+                      : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                  )}
+                >
+                  Quick Wins
+                </button>
+                <button
+                  onClick={() => setAiReportTab('rankings')}
+                  className={clsx(
+                    'flex-1 text-xs px-2 py-1.5 rounded transition-colors',
+                    aiReportTab === 'rankings'
+                      ? 'bg-amber-400/20 text-amber-400 border border-amber-400/30'
+                      : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                  )}
+                >
+                  Priorities
+                </button>
+              </div>
+
+              {/* Tab Content */}
+              {aiSummary && (
+                <div className="space-y-3">
+                  {aiReportTab === 'summary' && (
+                    <>
+                      <div className="p-3 bg-purple-400/10 border border-purple-400/20 rounded-lg">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Zap size={14} className="text-purple-400" />
+                          <span className="text-xs font-medium text-purple-400">Headline Risk</span>
+                        </div>
+                        <p className="text-sm text-white font-medium">{aiSummary.title}</p>
+                      </div>
+                      <div className="p-3 bg-slate-800 rounded-lg">
+                        <p className="text-xs text-slate-400 mb-1">Executive Summary</p>
+                        <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
+                          {aiSummary.executive_summary}
+                        </p>
+                      </div>
+                      {aiSummary.remediation_roadmap?.overall_risk_narrative && (
+                        <div className="p-3 bg-slate-800 rounded-lg">
+                          <p className="text-xs text-slate-400 mb-1">Risk Narrative</p>
+                          <p className="text-sm text-slate-200 leading-relaxed">
+                            {aiSummary.remediation_roadmap.overall_risk_narrative}
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {aiReportTab === 'quick-wins' && (
+                    <div className="space-y-2">
+                      {aiSummary.priority_ranking?.[0]?.recommended_action && (
+                        <div className="p-3 bg-emerald-400/10 border border-emerald-400/20 rounded-lg">
+                          <div className="flex items-center gap-2 mb-2">
+                            <CheckCircle size={14} className="text-emerald-400" />
+                            <span className="text-xs font-medium text-emerald-400">Top Quick Win</span>
+                          </div>
+                          <p className="text-sm text-slate-200 mb-1">
+                            {aiSummary.priority_ranking[0].recommended_action}
+                          </p>
+                          <p className="text-xs text-slate-400">
+                            {aiSummary.priority_ranking[0].priority_reasoning}
+                          </p>
+                        </div>
+                      )}
+                      {aiSummary.remediation_roadmap?.immediate_actions?.slice(0, 3).map((action, idx) => (
+                        <div key={idx} className="p-3 bg-slate-800 rounded-lg">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xs font-bold text-emerald-400">#{idx + 1}</span>
+                            <span className="text-xs text-slate-400">Effort: {action.effort}</span>
+                          </div>
+                          <p className="text-sm text-slate-200">{action.action}</p>
+                          <p className="text-xs text-slate-500 mt-1">{action.rationale}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {aiReportTab === 'rankings' && (
+                    <div className="space-y-2">
+                      {aiSummary.priority_ranking?.slice(0, 5).map((item, idx) => (
+                        <div key={idx} className="p-3 bg-slate-800 rounded-lg">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xs font-bold text-amber-400">#{item.rank}</span>
+                            <span className="text-xs text-slate-400 truncate flex-1">
+                              {item.path_string}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-400">{item.priority_reasoning}</p>
+                          <p className="text-sm text-slate-200 mt-1">{item.recommended_action}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!aiSummary && !aiSummaryLoading && (
+                <div className="text-center py-8">
+                  <FileText size={32} className="text-slate-600 mx-auto mb-2" />
+                  <p className="text-sm text-slate-400">No AI report available</p>
+                  <p className="text-xs text-slate-500 mt-1">Run AI analysis first</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         {!isLoading && !graphError && elements.length === 0 && graphData && (
           <div className="absolute inset-0 flex items-center justify-center">

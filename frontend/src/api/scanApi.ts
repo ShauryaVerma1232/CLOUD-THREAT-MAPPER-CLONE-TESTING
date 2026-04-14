@@ -174,3 +174,78 @@ export const aiApi = {
   getSummary: (scan_job_id: string) =>
     apiClient.get<AISummary>(`/ai/summary/${scan_job_id}`),
 }
+
+// ── Blast Radius API ──────────────────────────────────────────────────────────
+
+export interface CriticalResourceAtRisk {
+  node_id: string
+  node_type: string
+  label: string
+  is_admin: boolean
+  is_public: boolean
+}
+
+export interface AttackPathFromCompromised {
+  path_string: string
+  path_nodes: string[]
+  target_node: string
+  target_type: string
+  hop_count: number
+  risk_score: number
+  severity: string
+}
+
+export interface BlastRadiusResult {
+  result_id?: string
+  scan_job_id: string
+  compromised_node_id: string
+  compromised_node_type: string
+  compromised_node_label: string
+  direct_reach_count: number
+  secondary_reach_count: number
+  total_reachable_count: number
+  critical_count: number
+  direct_reach: string[]
+  secondary_reach: string[]
+  all_reachable: string[]
+  critical_at_risk: CriticalResourceAtRisk[]
+  by_hop_distance: Record<string, string[]>
+  blast_radius_severity: string
+  blast_radius_score: number
+  attack_paths_from_here: AttackPathFromCompromised[]
+}
+
+export interface BlastRadiusTriggerResponse {
+  scan_job_id: string
+  compromised_node_id: string
+  status: string
+  message: string
+}
+
+export interface PublicResourcesBlastRadius {
+  scan_job_id: string
+  public_resources_analyzed: number
+  results: Array<{
+    node_id: string
+    node_type: string
+    node_label: string
+    total_reachable: number
+    critical_count: number
+    severity: string
+    score: number
+  }>
+}
+
+export const blastRadiusApi = {
+  triggerCalculation: (scan_job_id: string, compromised_node_id: string, max_hops = 4, include_attack_paths = true) =>
+    apiClient.post<BlastRadiusTriggerResponse>(
+      `/graph/${scan_job_id}/blast-radius/calculate`,
+      { compromised_node_id, max_hops, include_attack_paths },
+    ),
+
+  getResult: (scan_job_id: string, node_id: string) =>
+    apiClient.get<BlastRadiusResult>(`/graph/${scan_job_id}/blast-radius/${node_id}`),
+
+  analyzePublicResources: (scan_job_id: string) =>
+    apiClient.get<PublicResourcesBlastRadius>(`/graph/${scan_job_id}/blast-radius/public`),
+}
