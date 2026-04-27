@@ -306,13 +306,17 @@ async def get_attack_paths_for_scan(
                p.exposure_score AS exposure_score,
                p.hop_count AS hop_count,
                p.validated AS validated,
-               p.ai_explanation AS ai_explanation,
-               p.ai_remediation AS ai_remediation,
-               p.ai_iam_detected AS ai_iam_detected,
-               p.ai_iam_techniques AS ai_escalation_techniques,
-               p.ai_iam_technique_count AS ai_technique_count,
-               p.ai_true_risk_assessment AS ai_true_risk_assessment,
-               p.ai_remediation_priority AS ai_remediation_priority
+               coalesce(p.ai_explanation, null) AS ai_explanation,
+               coalesce(p.ai_remediation, null) AS ai_remediation,
+               coalesce(p.ai_iam_detected, null) AS ai_iam_detected,
+               coalesce(p.ai_iam_techniques, null) AS ai_escalation_techniques,
+               coalesce(p.ai_iam_technique_count, 0) AS ai_technique_count,
+               coalesce(p.ai_true_risk_assessment, null) AS ai_true_risk_assessment,
+               coalesce(p.ai_remediation_priority, null) AS ai_remediation_priority,
+               coalesce(p.ai_threat_actors, null) AS ai_threat_actors,
+               coalesce(p.ai_mitre_mapping, null) AS ai_mitre_mapping,
+               coalesce(p.ai_blast_radius, null) AS ai_blast_radius,
+               coalesce(p.ai_compromise_timeline, null) AS ai_compromise_timeline
         ORDER BY p.risk_score DESC
         """,
         scan_job_id=scan_job_id,
@@ -340,6 +344,46 @@ async def get_attack_paths_for_scan(
             "true_risk_assessment": path_data.get("ai_true_risk_assessment", ""),
             "remediation_priority": path_data.get("ai_remediation_priority", "normal"),
         } if detected else None
+
+        # Parse threat actors from JSON string
+        threat_actors_str = path_data.get("ai_threat_actors")
+        if threat_actors_str:
+            try:
+                path_data["ai_threat_actors"] = json.loads(threat_actors_str)
+            except Exception:
+                path_data["ai_threat_actors"] = []
+        else:
+            path_data["ai_threat_actors"] = []
+
+        # Parse mitre mapping from JSON string
+        mitre_str = path_data.get("ai_mitre_mapping")
+        if mitre_str:
+            try:
+                path_data["ai_mitre_mapping"] = json.loads(mitre_str)
+            except Exception:
+                path_data["ai_mitre_mapping"] = {}
+        else:
+            path_data["ai_mitre_mapping"] = {}
+
+        # Parse blast radius from JSON string
+        blast_str = path_data.get("ai_blast_radius")
+        if blast_str:
+            try:
+                path_data["ai_blast_radius"] = json.loads(blast_str)
+            except Exception:
+                path_data["ai_blast_radius"] = {}
+        else:
+            path_data["ai_blast_radius"] = {}
+
+        # Parse compromise timeline from JSON string
+        timeline_str = path_data.get("ai_compromise_timeline")
+        if timeline_str:
+            try:
+                path_data["ai_compromise_timeline"] = json.loads(timeline_str)
+            except Exception:
+                path_data["ai_compromise_timeline"] = {}
+        else:
+            path_data["ai_compromise_timeline"] = {}
 
         paths.append(path_data)
     return paths

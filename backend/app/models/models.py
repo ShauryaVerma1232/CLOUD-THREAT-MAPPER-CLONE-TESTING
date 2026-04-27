@@ -91,6 +91,14 @@ class AttackPath(Base):
     ai_escalation_applied = Column(Boolean, nullable=True, server_default="false")  # True if AI escalated risk score
     ai_escalation_multiplier = Column(Float, nullable=True)  # Multiplier applied (1.3x - 2.0x)
 
+    # Threat actor TTP mapping
+    ai_threat_actors = Column(JSON, nullable=True)  # Threat actor matches and real-world incidents
+    ai_mitre_mapping = Column(JSON, nullable=True)  # MITRE ATT&CK for Cloud matrix mapping
+
+    # Blast radius quantification
+    ai_blast_radius = Column(JSON, nullable=True)  # Quantitative blast radius analysis
+    ai_compromise_timeline = Column(JSON, nullable=True)  # Estimated time to compromise
+
     # Sandbox validation
     validated = Column(Boolean, default=False, nullable=False)
     validated_exploitable = Column(Boolean, nullable=True)

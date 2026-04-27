@@ -66,6 +66,7 @@ def scan_ec2(session: AWSSession, model: InfrastructureModel) -> None:
     """Scan all EC2 instances in the region."""
     log.info("scanner.ec2.start", region=session.region)
     ec2 = session.client("ec2")
+    iam = session.client("iam")
     paginator = ec2.get_paginator("describe_instances")
 
     count = 0
@@ -76,11 +77,26 @@ def scan_ec2(session: AWSSession, model: InfrastructureModel) -> None:
                     # Extract IAM role from instance profile ARN
                     profile = inst.get("IamInstanceProfile", {})
                     profile_arn = profile.get("Arn")
+                    profile_name = None
+                    role_arn = None
                     role_name = None
+
                     if profile_arn:
-                        # arn:aws:iam::123:instance-profile/MyRole
+                        # arn:aws:iam::123:instance-profile/MyProfile
                         parts = profile_arn.split("/")
-                        role_name = parts[-1] if len(parts) > 1 else None
+                        profile_name = parts[-1] if len(parts) > 1 else None
+
+                        # Resolve instance profile to get the actual role
+                        if profile_name:
+                            try:
+                                profile_info = iam.get_instance_profile(InstanceProfileName=profile_name)
+                                roles = profile_info.get("InstanceProfile", {}).get("Roles", [])
+                                if roles:
+                                    role_arn = roles[0].get("Arn")
+                                    role_name = roles[0].get("RoleName")
+                            except ClientError:
+                                # Fall back to profile name if we can't resolve
+                                role_name = profile_name
 
                     instance = EC2Instance(
                         instance_id=inst["InstanceId"],
@@ -92,6 +108,7 @@ def scan_ec2(session: AWSSession, model: InfrastructureModel) -> None:
                         public_ip=inst.get("PublicIpAddress"),
                         iam_instance_profile_arn=profile_arn,
                         iam_role_name=role_name,
+                        iam_role_arn=role_arn,
                         security_group_ids=[
                             sg["GroupId"] for sg in inst.get("SecurityGroups", [])
                         ],

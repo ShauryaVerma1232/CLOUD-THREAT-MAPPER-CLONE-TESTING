@@ -51,17 +51,19 @@ def _write_to_neo4j_sync(driver, G, scan_job_id: str, paths: list) -> dict:
                 "region":       attrs.get("region", ""),
                 "scan_job_id":  scan_job_id,
                 "metadata_json": json.dumps(attrs.get("metadata", {})),
+                "is_internet":  node_id == "INTERNET",
             }
             for node_id, attrs in G.nodes(data=True)
         ]
         for batch in chunks(nodes, BATCH):
             session.run("""
                 UNWIND $nodes AS n
-                MERGE (r:Resource {node_id: n.node_id, scan_job_id: n.scan_job_id})
+                MERGE (r:Resource {node_id: n.node_id})
                 SET r += {node_type: n.node_type, label: n.label,
                           risk_score: n.risk_score, public: n.public,
                           account_id: n.account_id, region: n.region,
-                          metadata_json: n.metadata_json}
+                          metadata_json: n.metadata_json,
+                          scan_job_id: CASE WHEN n.is_internet THEN 'global' ELSE n.scan_job_id END}
             """, nodes=batch)
 
         edges = [
@@ -78,7 +80,7 @@ def _write_to_neo4j_sync(driver, G, scan_job_id: str, paths: list) -> dict:
         for batch in chunks(edges, BATCH):
             session.run("""
                 UNWIND $edges AS e
-                MATCH (src:Resource {node_id: e.source_id, scan_job_id: e.scan_job_id})
+                MATCH (src:Resource {node_id: e.source_id})
                 MATCH (tgt:Resource {node_id: e.target_id, scan_job_id: e.scan_job_id})
                 MERGE (src)-[r:RELATIONSHIP {edge_type: e.edge_type, scan_job_id: e.scan_job_id}]->(tgt)
                 SET r.weight = e.weight, r.validated = e.validated

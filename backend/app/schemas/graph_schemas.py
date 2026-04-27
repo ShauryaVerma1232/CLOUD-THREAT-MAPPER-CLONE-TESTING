@@ -50,6 +50,14 @@ class AttackPathResponse(BaseModel):
     ai_true_risk_assessment: Optional[str] = None
     ai_remediation_priority: Optional[str] = None
 
+    # Threat actor TTP mapping
+    ai_threat_actors: Optional[list[dict]] = None
+    ai_mitre_mapping: Optional[dict] = None
+
+    # Blast radius quantification
+    ai_blast_radius: Optional[dict] = None
+    ai_compromise_timeline: Optional[dict] = None
+
 
 class AttackPathListResponse(BaseModel):
     scan_job_id: str

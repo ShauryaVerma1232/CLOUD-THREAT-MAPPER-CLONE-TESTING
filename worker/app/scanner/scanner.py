@@ -18,6 +18,10 @@ from app.scanner.modules.iam_scanner import scan_iam_roles, scan_iam_users
 from app.scanner.modules.s3_scanner import scan_s3
 from app.scanner.modules.rds_scanner import scan_rds
 from app.scanner.modules.lambda_scanner import scan_lambda
+from app.scanner.modules.network_scanner import (
+    scan_nat_gateways, scan_internet_gateways, scan_vpc_endpoints,
+)
+from app.scanner.modules.iam_analyzer import analyze_iam_privilege_escalation
 
 log = structlog.get_logger()
 
@@ -64,6 +68,7 @@ def run_scan(
     # ── Run scanner modules ───────────────────────────────────────────────────
     # Order matters: VPC/subnet/SG must run before EC2
     # IAM must run before relationship builder
+    # Network gateways must run after VPCs
     modules = [
         ("VPC",              lambda: scan_vpcs(session, model)),
         ("Subnets",          lambda: scan_subnets(session, model)),
@@ -74,6 +79,10 @@ def run_scan(
         ("S3 Buckets",       lambda: scan_s3(session, model)),
         ("RDS Instances",    lambda: scan_rds(session, model)),
         ("Lambda Functions", lambda: scan_lambda(session, model)),
+        ("NAT Gateways",     lambda: scan_nat_gateways(session, model)),
+        ("Internet Gateways", lambda: scan_internet_gateways(session, model)),
+        ("VPC Endpoints",    lambda: scan_vpc_endpoints(session, model)),
+        ("IAM Analysis",     lambda: analyze_iam_privilege_escalation(model)),
     ]
 
     for name, fn in modules:
@@ -115,6 +124,9 @@ def run_scan(
             "security_groups":  len(model.security_groups),
             "rds_instances":    len(model.rds_instances),
             "lambda_functions": len(model.lambda_functions),
+            "nat_gateways":     len(model.nat_gateways),
+            "internet_gateways": len(model.internet_gateways),
+            "vpc_endpoints":    len(model.vpc_endpoints),
         },
     }
 

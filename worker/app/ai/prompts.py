@@ -43,7 +43,7 @@ def path_explanation_prompt(
     Returns structured JSON with explanation, attack_steps, business_impact, remediation.
     """
     import json
-    return f"""Analyze this AWS infrastructure attack path and provide a detailed security explanation.
+    return f"""You are analyzing an AWS infrastructure attack path for a security research paper.
 
 ATTACK PATH:
 {path_string}
@@ -56,18 +56,186 @@ PATH DETAILS:
 EDGES (relationships):
 {json.dumps(path_edges, indent=2)}
 
-Respond ONLY with a valid JSON object — no markdown, no preamble:
+Provide a RESEARCH-GRADE analysis with the following structure. Respond ONLY with valid JSON:
+
 {{
-  "explanation": "2-3 sentence summary of why this path is dangerous",
-  "attack_narrative": "Step-by-step description of how an attacker exploits this path. Be specific about AWS API calls, tools (e.g. aws-cli, pacu, impacket), and techniques.",
-  "business_impact": "Concrete business impact if exploited (data breach, ransomware pivot, account takeover, etc.)",
-  "likelihood": "realistic | likely | highly_likely",
+  "explanation": "2-3 sentence technical summary of why this path is dangerous",
+
+  "attack_narrative": "Detailed step-by-step exploitation guide. For EACH step include:
+    - The specific AWS CLI command or API call (e.g., `aws sts assume-role --role-arn arn:aws:iam::123456789:role/ExampleRole --role-session-name attacker`)
+    - The tool that could be used (aws-cli, pacu, Stratus Red Team, custom scripts)
+    - What the attacker gains at this step",
+
+  "mitre_attack_mapping": {{
+    "tactics": ["TA0001: Initial Access", "TA0004: Privilege Escalation"],
+    "techniques": [
+      {{"id": "T1078", "name": "Valid Accounts", "subtechnique": "T1078.001: Cloud Accounts"}},
+      {{"id": "T1098", "name": "Account Manipulation"}}
+    ],
+    "software": "Pacu, Stratus Red Team, aws-cli"
+  }},
+
+  "threat_actor_context": "Which real-world threat actors have used similar techniques? Reference specific incidents (e.g., Capital One 2019, Uber 2022, Okta 2023). If no direct match, note 'Novel technique combination' or 'Consistent with APT cloud TTPs'.",
+
+  "business_impact": "Quantify impact: data volume at risk, number of affected customers, regulatory implications (GDPR, HIPAA, SOC2), estimated breach cost",
+
+  "likelihood": "realistic | likely | highly_likely — with 1-sentence justification",
+
+  "exploit_complexity": "low | medium | high — based on: does it require public access? authentication? specific timing?",
+
   "remediation_steps": [
-    "Specific, actionable fix #1 (include AWS console path or CLI command where possible)",
-    "Specific, actionable fix #2",
-    "Specific, actionable fix #3"
+    {{"action": "Specific fix", "aws_cli": "aws iam ... command to fix", "effort": "low|medium|high", "breaks_legacy": "yes|no — will this break existing apps?"}},
+    {{"action": "...", "aws_cli": "...", "effort": "...", "breaks_legacy": "..."}}
   ],
-  "detection_signals": "What CloudTrail events or GuardDuty findings would indicate this path is being exploited"
+
+  "detection_queries": {{
+    "cloudtrail": "SELECT eventName, userIdentity.arn, sourceIPAddress FROM CloudTrail WHERE eventName = 'AssumeRole' AND ...",
+    "guardduty": "Relevant GuardDuty finding types (e.g., PrivilegeEscalation:IAMUser/AssumeRoleAnomaly)",
+    "athena_hunt": "Full Athena query to hunt for historical exploitation"
+  }},
+
+  "blast_radius_estimate": {{
+    "resources_at_risk": "Estimated count of resources accessible post-exploitation",
+    "data_assets": "S3 buckets, RDS instances, secrets accessible",
+    "iam_principals": "Number of IAM users/roles that can be accessed",
+    "lateral_movement_potential": "low | medium | high — can attacker pivot further?"
+  }}
+}}"""
+
+
+# ── Threat Actor TTP Mapping ──────────────────────────────────────────────────
+
+def threat_actor_mapping_prompt(
+    path_string: str,
+    path_nodes: list[dict],
+    path_edges: list[dict],
+) -> str:
+    """
+    Map attack path to known threat actors and their TTPs.
+    This provides context for research papers by connecting findings to real-world incidents.
+    """
+    import json
+    return f"""Map this AWS attack path to known threat actors and real-world incidents.
+
+ATTACK PATH:
+{path_string}
+
+PATH DETAILS:
+{json.dumps(path_nodes, indent=2)}
+
+EDGES:
+{json.dumps(path_edges, indent=2)}
+
+Research and identify:
+1. **APT Groups**: Which APT groups have used similar cloud TTPs? (e.g., APT29, APT41, UNC2904)
+2. **Cybercriminal Groups**: Ransomware gangs, eCrime groups with cloud exploitation patterns
+3. **Real Breaches**: Specific incidents where similar attack paths were exploited
+4. **MITRE ATT&CK for Cloud**: Map to the official matrix
+
+Respond ONLY with valid JSON:
+{{
+  "threat_actor_matches": [
+    {{
+      "actor_name": "UNC2904 (SolarStorm)",
+      "actor_type": "Nation-state (Russia SVR)",
+      "similarity": "high | medium | low",
+      "overlapping_techniques": ["SSRF to IMDSv1", "IAM role assumption", "Cross-account lateral movement"],
+      "source": "Mandiant M-Trends 2021, CISA AA21-028A"
+    }}
+  ],
+
+  "real_world_incidents": [
+    {{
+      "incident_name": "Capital One Breach (2019)",
+      "year": 2019,
+      "attacker": " Paige Thompson (hacktivist)",
+      "technique": "SSRF via web application firewall to IMDSv1, retrieved IAM role credentials",
+      "impact": "100M+ customer records",
+      "similarity_to_current_path": "Explain how this relates to the current scan"
+    }}
+  ],
+
+  "mitre_attack_cloud_matrix": {{
+    "tactics": [
+      {{"id": "TA0001", "name": "Initial Access", "techniques_used": ["T1190: Exploit Public-Facing Application"]}}
+    ],
+    "full_mapping": "https://attack.mitre.org/matrices/enterprise/cloud/"
+  }},
+
+  "industry_sector_relevance": "Which sectors are most targeted by actors using these TTPs? (e.g., 'Financial services and healthcare are primary targets for ransomware groups using cloud privilege escalation')"
+}}"""
+
+
+# ── Blast Radius Quantification ───────────────────────────────────────────────
+
+def blast_radius_analysis_prompt(
+    path_string: str,
+    path_nodes: list[dict],
+    path_edges: list[dict],
+    all_resources: list[dict],
+) -> str:
+    """
+    Quantify the blast radius of an attack path.
+    This computes HOW MANY resources would be compromised if this path is exploited.
+    """
+    import json
+    return f"""Quantify the blast radius of this attack path.
+
+ATTACK PATH:
+{path_string}
+
+PATH NODES:
+{json.dumps(path_nodes, indent=2)}
+
+ALL RESOURCES IN SCOPE:
+{json.dumps(all_resources[:30], indent=2)}  # Limited to top 30 for token budget
+
+Calculate the blast radius by analyzing:
+1. **Direct Access**: Resources directly accessible from the terminal node
+2. **IAM Principal Access**: How many IAM users/roles can be accessed/assumed
+3. **Data Assets**: S3 buckets, RDS instances, Secrets Manager secrets accessible
+4. **Compute Resources**: EC2 instances, Lambda functions that can be modified
+5. **Network Access**: VPCs, subnets, security groups that can be modified
+6. **Persistence**: Can attacker create backdoors (access keys, login profiles, IAM users)?
+
+Respond ONLY with valid JSON:
+{{
+  "blast_radius_summary": {{
+    "total_resources_at_risk": <integer count>,
+    "iam_principals_accessible": <integer count>,
+    "data_assets_accessible": {{
+      "s3_buckets": <count>,
+      "rds_instances": <count>,
+      "secrets": <count>,
+      "estimated_data_volume": "GB/TB estimate if available"
+    }},
+    "compute_resources_at_risk": {{
+      "ec2_instances": <count>,
+      "lambda_functions": <count>,
+      "can_deploy_code": true/false
+    }},
+    "network_infrastructure": {{
+      "vpcs_affected": <count>,
+      "security_groups_modifiable": <count>,
+      "can_disable_logging": true/false
+    }}
+  }},
+
+  "compromise_timeline": {{
+    "initial_access": "<time estimate, e.g., '30 seconds'>",
+    "privilege_escalation": "<time estimate>",
+    "lateral_movement": "<time estimate>",
+    "full_compromise": "<time estimate, e.g., '5-10 minutes'>",
+    "confidence": "low | medium | high"
+  }},
+
+  "attack_chain_depth": {{
+    "hop_count": <integer>,
+    "complexity": "low | medium | high",
+    "automation_potential": "Can this be fully automated? true/false"
+  }},
+
+  "cascading_failures": "What secondary systems would be affected? (e.g., 'CI/CD pipeline compromise → supply chain attack', 'Backup access → ransomware persistence')"
 }}"""
 
 
@@ -155,7 +323,8 @@ def deep_iam_analysis_prompt(
     This is a specialized analysis that looks for subtle IAM attack patterns.
     """
     import json
-    return f"""You are an IAM security expert analyzing this AWS attack path for privilege escalation patterns.
+    return f"""You are an IAM security researcher analyzing this AWS attack path for privilege escalation patterns.
+This analysis will be published in a peer-reviewed security research paper.
 
 ATTACK PATH:
 {path_string}
@@ -168,49 +337,96 @@ PATH DETAILS:
 EDGES (relationships):
 {json.dumps(path_edges, indent=2)}
 
-Analyze this path for the following IAM privilege escalation patterns:
+Analyze for these IAM privilege escalation patterns with RESEARCH-GRADE depth:
 
-1. **Policy Attachment/Modification**: Can any principal in the path attach policies, create policy versions, or set default policy versions?
-   - iam:AttachUserPolicy, iam:AttachGroupPolicy, iam:AttachRolePolicy
-   - iam:PutUserPolicy, iam:PutGroupPolicy, iam:PutRolePolicy
-   - iam:CreatePolicyVersion, iam:SetDefaultPolicyVersion
+**Category 1: Policy Attachment/Modification**
+- iam:AttachUserPolicy, iam:AttachGroupPolicy, iam:AttachRolePolicy
+- iam:PutUserPolicy, iam:PutGroupPolicy, iam:PutRolePolicy
+- iam:CreatePolicyVersion, iam:SetDefaultPolicyVersion
+- iam:CreatePolicy, iam:DeletePolicyVersion
 
-2. **Role Assumption/Chaining**: Can any principal assume roles that grant additional privileges?
-   - Look for trust relationships that allow role assumption
-   - Check for role chaining possibilities
+**Category 2: Role Assumption & Chaining**
+- sts:AssumeRole, sts:AssumeRoleWithSAML, sts:AssumeRoleWithWebIdentity
+- Trust relationship exploitation
+- Role chaining (Role A → Role B → Admin)
 
-3. **Credential Creation**: Can any principal create access keys or login profiles?
-   - iam:CreateAccessKey, iam:CreateLoginProfile
-   - iam:UpdateLoginProfile (password reset)
+**Category 3: Credential Creation/Manipulation**
+- iam:CreateAccessKey, iam:CreateLoginProfile, iam:UpdateLoginProfile
+- iam:CreateUser, iam:DeleteUser (account takeover)
 
-4. **PassRole + Service Deployment**: Can any principal pass a role to a service (EC2, Lambda, etc.)?
-   - iam:PassRole combined with ec2:RunInstances, lambda:CreateFunction
+**Category 4: PassRole + Service Deployment**
+- iam:PassRole + ec2:RunInstances (instance profile hijack)
+- iam:PassRole + lambda:CreateFunction (code execution with elevated privileges)
+- iam:PassRole + glue:CreateDevEndpoint, glue:UpdateDevEndpoint
+- iam:PassRole + cloudformation:CreateStack, cloudformation:UpdateStack
 
-5. **Resource-Based Policy Modification**: Can any principal modify S3 bucket policies, KMS key policies, etc.?
-   - s3:PutBucketPolicy, kms:PutKeyPolicy, etc.
+**Category 5: Resource-Based Policy Modification**
+- s3:PutBucketPolicy, s3:PutBucketAcl
+- kms:PutKeyPolicy, kms:CreateGrant
+- secretsmanager:PutResourcePolicy
 
-6. **Glue/CloudFormation Deployment**: Can any principal deploy Glue dev endpoints or CloudFormation stacks?
-   - glue:CreateDevEndpoint, cloudformation:CreateStack (code execution)
+**Category 6: Data Exfiltration Paths**
+- s3:GetObject, s3:ListBucket on sensitive buckets
+- rds:DescribeDBInstances + rds:CopyDBSnapshot (cross-account snapshot theft)
 
-Respond ONLY with a valid JSON object:
+For EACH technique detected, provide:
+1. The EXACT IAM permission(s) required
+2. The AWS API call sequence an attacker would make
+3. Why this is dangerous in THIS specific context
+4. Which MITRE ATT&CK technique it maps to
+
+Respond ONLY with valid JSON:
 {{
   "privilege_escalation_detected": true/false,
+
   "escalation_techniques": [
     {{
-      "technique": "Name of the technique (e.g., 'Policy Attachment via iam:AttachUserPolicy')",
-      "description": "How this technique works in this specific path",
+      "technique_name": "Descriptive name (e.g., 'Admin Role Attachment via iam:AttachRolePolicy')",
+      "category": "Policy Attachment | Role Chaining | Credential Creation | PassRole Abuse | Resource Policy | Data Exfiltration",
+      "required_permissions": ["iam:AttachRolePolicy", "sts:AssumeRole"],
+      "attack_command": "aws iam attach-role-policy --role-name <ROLE> --policy-arn arn:aws:iam::aws:policy/AdministratorAccess",
+      "mitre_mapping": {{
+        "tactic": "TA0004: Privilege Escalation",
+        "technique": "T1078: Valid Accounts",
+        "subtechnique": "T1078.001: Cloud Accounts"
+      }},
       "severity": "critical | high | medium | low",
-      "evidence": "Specific IAM permissions or trust relationships that enable this"
+      "evidence": "Quote the exact policy statement or trust relationship from the path data",
+      "why_dangerous": "Explain why THIS specific configuration is dangerous, not generic statements",
+      "real_world_precedent": "Reference a real breach if applicable (e.g., 'Capital One 2019 used similar SSRF + IMDSv1 technique')"
     }}
   ],
-  "attack_narrative_enhanced": "Step-by-step narrative incorporating the privilege escalation techniques",
-  "true_risk_assessment": "Revised risk assessment considering privilege escalation potential (may be higher than base score)",
+
+  "attack_narrative_enhanced": "Complete attack narrative that weaves together ALL detected techniques into a coherent story. Include:
+    - Initial access method
+    - Each privilege escalation step with specific API calls
+    - Final impact (what can attacker access/do)
+    - Estimated time to full compromise (e.g., '5-10 minutes for experienced attacker')",
+
+  "quantitative_risk_assessment": {{
+    "base_score": {risk_score},
+    "escalation_factor": "1.3x | 1.5x | 1.7x | 2.0x — justify why",
+    "escalated_score": "calculated score (capped at 10.0)",
+    "justification": "Why this escalation factor? Reference number of escalation techniques, blast radius, etc."
+  }},
+
   "remediation_priority": "immediate | high | normal | low",
+
   "specific_mitigations": [
-    "Specific IAM policy change #1 with exact permission to restrict",
-    "Specific IAM policy change #2",
-    "Monitoring/CloudTrail alert to add"
-  ]
+    {{
+      "mitigation": "Exact IAM policy change",
+      "policy_snippet": "{{\\"Effect\\": \\"Deny\\", \\"Action\\": \\"iam:AttachRolePolicy\\", ...}}",
+      "breaking_change_risk": "low | medium | high — will this break legitimate apps?",
+      "implementation_notes": "Rollout strategy, testing recommendations"
+    }}
+  ],
+
+  "detection_rules": {{
+    "cloudtrail_events": ["AttachRolePolicy", "AssumeRole", "CreateAccessKey"],
+    "guardduty_findings": ["PrivilegeEscalation:IAMUser/AssumeRoleAnomaly", "Persistence:IAMUser/AccessKeyAnomaly"],
+    "athena_query": "SELECT eventName, userIdentity.arn, eventSource FROM CloudTrail WHERE eventName IN ('AttachRolePolicy', 'AssumeRole') AND eventTime > NOW() - INTERVAL '7' DAY",
+    "splunk_query": "index=aws_cloudtrail eventName IN (AttachRolePolicy, AssumeRole) | stats count by userIdentity.arn, sourceIPAddress"
+  }}
 }}"""
 
 

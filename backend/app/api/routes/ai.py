@@ -135,7 +135,13 @@ async def get_ai_annotated_paths(
             SELECT id::text, path_string, risk_score, severity,
                    ai_explanation, ai_remediation,
                    reachability_score, impact_score,
-                   exploitability_score, exposure_score
+                   exploitability_score, exposure_score,
+                   ai_privilege_escalation::text,
+                   ai_escalation_techniques::text,
+                   ai_threat_actors::text,
+                   ai_mitre_mapping::text,
+                   ai_blast_radius::text,
+                   ai_compromise_timeline::text
             FROM attack_paths
             WHERE scan_job_id::text = :sid
             ORDER BY risk_score DESC
@@ -147,10 +153,24 @@ async def get_ai_annotated_paths(
     paths = []
     for row in rows:
         remediation = []
+        privilege_escalation = None
+        escalation_techniques = []
+        threat_actors = []
+        mitre_mapping = {}
+        blast_radius = None
+        compromise_timeline = None
+
         try:
             remediation = json.loads(row.ai_remediation or "[]")
+            privilege_escalation = json.loads(row.ai_privilege_escalation) if row.ai_privilege_escalation else None
+            escalation_techniques = json.loads(row.ai_escalation_techniques or "[]")
+            threat_actors = json.loads(row.ai_threat_actors or "[]")
+            mitre_mapping = json.loads(row.ai_mitre_mapping or "{}")
+            blast_radius = json.loads(row.ai_blast_radius) if row.ai_blast_radius else None
+            compromise_timeline = json.loads(row.ai_compromise_timeline) if row.ai_compromise_timeline else None
         except Exception:
             pass
+
         paths.append({
             "id":                   row.id,
             "path_string":          row.path_string,
@@ -162,6 +182,12 @@ async def get_ai_annotated_paths(
             "impact_score":         row.impact_score,
             "exploitability_score": row.exploitability_score,
             "exposure_score":       row.exposure_score,
+            "ai_privilege_escalation": privilege_escalation,
+            "ai_escalation_techniques": escalation_techniques,
+            "ai_threat_actors": threat_actors,
+            "ai_mitre_mapping": mitre_mapping,
+            "ai_blast_radius": blast_radius,
+            "ai_compromise_timeline": compromise_timeline,
         })
 
     return {"scan_job_id": sid, "items": paths, "total": len(paths)}
@@ -172,7 +198,7 @@ async def get_ai_summary(
     scan_job_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    """Return AI-generated executive summary and remediation roadmap."""
+    """Return AI-generated executive summary and remediation roadmap with enriched threat intelligence."""
     sid = str(scan_job_id)
 
     row = (await db.execute(
@@ -199,6 +225,38 @@ async def get_ai_summary(
     except Exception:
         pass
 
+    # Fetch enriched AI analysis from attack_paths (threat actors, blast radius, IAM escalation)
+    enriched_paths = (await db.execute(
+        text("""
+            SELECT
+                path_string,
+                ai_privilege_escalation::text,
+                ai_escalation_techniques::text,
+                ai_threat_actors::text,
+                ai_mitre_mapping::text,
+                ai_blast_radius::text,
+                ai_compromise_timeline::text
+            FROM attack_paths
+            WHERE scan_job_id::text = :sid
+              AND (ai_threat_actors IS NOT NULL OR ai_blast_radius IS NOT NULL OR ai_privilege_escalation IS NOT NULL)
+            ORDER BY risk_score DESC
+            LIMIT 10
+        """),
+        {"sid": sid},
+    )).fetchall()
+
+    enriched_analysis = []
+    for p in enriched_paths:
+        enriched_analysis.append({
+            "path_string": p.path_string,
+            "privilege_escalation": json.loads(p.ai_privilege_escalation or "null"),
+            "escalation_techniques": json.loads(p.ai_escalation_techniques or "[]"),
+            "threat_actors": json.loads(p.ai_threat_actors or "[]"),
+            "mitre_mapping": json.loads(p.ai_mitre_mapping or "{}"),
+            "blast_radius": json.loads(p.ai_blast_radius or "{}"),
+            "compromise_timeline": json.loads(p.ai_compromise_timeline or "{}"),
+        })
+
     return {
         "scan_job_id":         sid,
         "title":               row.title,
@@ -206,4 +264,5 @@ async def get_ai_summary(
         "priority_ranking":    findings if isinstance(findings, list) else [],
         "remediation_roadmap": roadmap,
         "generated_at":        row.created_at.isoformat() if row.created_at else None,
+        "enriched_analysis":   enriched_analysis,
     }

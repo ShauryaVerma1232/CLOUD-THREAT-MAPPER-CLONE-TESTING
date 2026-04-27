@@ -65,6 +65,81 @@ export interface AttackPath {
   exposure_score: number
   hop_count: number
   validated: boolean
+
+  // AI enrichment
+  ai_explanation?: string | null
+  ai_remediation?: string | null
+
+  // Deep IAM privilege escalation analysis
+  ai_privilege_escalation?: {
+    detected: boolean
+    technique_count: number
+    true_risk_assessment: string
+    remediation_priority: string
+  } | null
+
+  ai_escalation_techniques?: Array<{
+    technique_name: string
+    category: string
+    required_permissions: string[]
+    attack_command: string
+    mitre_mapping: {
+      tactic: string
+      technique: string
+      subtechnique: string
+    }
+    severity: string
+    evidence: string
+    why_dangerous: string
+    real_world_precedent: string
+  }> | null
+
+  ai_true_risk_assessment?: string | null
+  ai_remediation_priority?: string | null
+
+  // Threat actor TTP mapping
+  ai_threat_actors?: Array<{
+    actor_name: string
+    actor_type: string
+    similarity: string
+    overlapping_techniques: string[]
+    source: string
+  }> | null
+
+  ai_mitre_mapping?: {
+    tactics: Array<{ id: string; name: string; techniques_used: string[] }>
+    full_mapping: string
+  } | null
+
+  // Blast radius quantification
+  ai_blast_radius?: {
+    total_resources_at_risk: number
+    iam_principals_accessible: number
+    data_assets_accessible: {
+      s3_buckets: number
+      rds_instances: number
+      secrets: number
+      estimated_data_volume: string
+    }
+    compute_resources_at_risk: {
+      ec2_instances: number
+      lambda_functions: number
+      can_deploy_code: boolean
+    }
+    network_infrastructure: {
+      vpcs_affected: number
+      security_groups_modifiable: number
+      can_disable_logging: boolean
+    }
+  } | null
+
+  ai_compromise_timeline?: {
+    initial_access: string
+    privilege_escalation: string
+    lateral_movement: string
+    full_compromise: string
+    confidence: string
+  } | null
 }
 
 export interface AttackPathList {
@@ -156,6 +231,52 @@ export interface AISummary {
     overall_risk_narrative?: string
   }
   generated_at: string | null
+
+  // Enriched AI analysis from attack_paths
+  enriched_analysis?: Array<{
+    path_string: string
+    privilege_escalation?: {
+      detected: boolean
+      technique_count: number
+      true_risk_assessment: string
+      remediation_priority: string
+    } | null
+    escalation_techniques?: Array<{
+      technique_name: string
+      category: string
+      required_permissions: string[]
+      attack_command: string
+      mitre_mapping: { tactic: string; technique: string; subtechnique: string }
+      severity: string
+      evidence: string
+      why_dangerous: string
+    }> | null
+    threat_actors?: Array<{
+      actor_name: string
+      actor_type: string
+      similarity: string
+      overlapping_techniques: string[]
+      source: string
+    }> | null
+    mitre_mapping?: {
+      tactics: Array<{ id: string; name: string; techniques_used: string[] }>
+      full_mapping: string
+    } | null
+    blast_radius?: {
+      total_resources_at_risk: number
+      iam_principals_accessible: number
+      data_assets_accessible: { s3_buckets: number; rds_instances: number; secrets: number; estimated_data_volume: string }
+      compute_resources_at_risk: { ec2_instances: number; lambda_functions: number; can_deploy_code: boolean }
+      network_infrastructure: { vpcs_affected: number; security_groups_modifiable: number; can_disable_logging: boolean }
+    } | null
+    compromise_timeline?: {
+      initial_access: string
+      privilege_escalation: string
+      lateral_movement: string
+      full_compromise: string
+      confidence: string
+    } | null
+  }>
 }
 
 export const aiApi = {

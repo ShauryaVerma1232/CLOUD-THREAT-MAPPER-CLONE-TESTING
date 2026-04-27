@@ -210,7 +210,7 @@ def scan_iam_users(session: AWSSession, model: InfrastructureModel) -> None:
                 except ClientError:
                     pass
 
-                # Attached policies
+                # Attached policies (ARNs only)
                 attached_arns = []
                 try:
                     att_p = iam.get_paginator("list_attached_user_policies")
@@ -239,6 +239,7 @@ def scan_iam_users(session: AWSSession, model: InfrastructureModel) -> None:
                     access_keys=access_keys,
                     attached_policy_arns=attached_arns,
                     inline_policies=[],
+                    managed_policies=[],  # Users typically don't have managed policies fetched
                     groups=groups,
                     tags={},
                 )

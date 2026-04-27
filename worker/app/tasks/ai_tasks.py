@@ -25,6 +25,8 @@ log = structlog.get_logger()
 MAX_PATHS_TO_EXPLAIN   = 5    # reduced from 10
 MAX_NODES_TO_ANNOTATE  = 3    # reduced from 20 — annotate top 3 most risky only
 MAX_DEEP_IAM_ANALYSIS  = 2    # Deep IAM analysis for top 2 highest-risk paths
+MAX_THREAT_ACTOR_MAP   = 2    # Threat actor mapping for top 2 critical paths
+MAX_BLAST_RADIUS       = 3    # Blast radius analysis for top 3 paths
 INTER_CALL_DELAY       = 12.0  # seconds between API calls — conservative for Groq free tier (5 RPM)
 
 # Risk escalation multipliers
@@ -92,8 +94,8 @@ def _update_path_iam_analysis(db, path_id: str, iam_analysis: dict) -> None:
         db.execute(
             text("""
                 UPDATE attack_paths
-                SET ai_privilege_escalation = :iam_analysis,
-                    ai_escalation_techniques = :techniques,
+                SET ai_privilege_escalation = CAST(:iam_analysis AS JSONB),
+                    ai_escalation_techniques = CAST(:techniques AS JSONB),
                     ai_true_risk_assessment = :risk_assessment,
                     ai_remediation_priority = :priority
                 WHERE id::text = :path_id
@@ -111,6 +113,56 @@ def _update_path_iam_analysis(db, path_id: str, iam_analysis: dict) -> None:
     except Exception as e:
         db.rollback()
         log.warning("ai_task.iam_analysis_update_error", error=str(e))
+
+
+def _update_path_threat_actor_mapping(db, path_id: str, threat_actor_data: dict) -> None:
+    """
+    Update attack_paths table with threat actor TTP mapping.
+    """
+    try:
+        db.execute(
+            text("""
+                UPDATE attack_paths
+                SET ai_threat_actors = CAST(:threat_actors AS JSONB),
+                    ai_mitre_mapping = CAST(:mitre_mapping AS JSONB)
+                WHERE id::text = :path_id
+            """),
+            {
+                "path_id":       path_id,
+                "threat_actors": json.dumps(threat_actor_data.get("threat_actor_matches", [])),
+                "mitre_mapping": json.dumps(threat_actor_data.get("mitre_attack_cloud_matrix", {})),
+            },
+        )
+        db.commit()
+        log.info("ai_task.threat_actor_mapping_saved", path_id=path_id)
+    except Exception as e:
+        db.rollback()
+        log.warning("ai_task.threat_actor_mapping_error", error=str(e))
+
+
+def _update_path_blast_radius(db, path_id: str, blast_radius_data: dict) -> None:
+    """
+    Update attack_paths table with blast radius quantification.
+    """
+    try:
+        db.execute(
+            text("""
+                UPDATE attack_paths
+                SET ai_blast_radius = CAST(:blast_radius AS JSONB),
+                    ai_compromise_timeline = CAST(:timeline AS JSONB)
+                WHERE id::text = :path_id
+            """),
+            {
+                "path_id":   path_id,
+                "blast_radius": json.dumps(blast_radius_data.get("blast_radius_summary", {})),
+                "timeline": json.dumps(blast_radius_data.get("compromise_timeline", {})),
+            },
+        )
+        db.commit()
+        log.info("ai_task.blast_radius_saved", path_id=path_id)
+    except Exception as e:
+        db.rollback()
+        log.warning("ai_task.blast_radius_error", error=str(e))
 
 
 def _update_path_risk_score(db, path_id: str, new_risk_score: float, new_severity: str) -> None:
@@ -178,6 +230,60 @@ def _update_neo4j_path_iam_analysis(
         log.info("ai_task.neo4j_iam_analysis_updated", path_string=path_string[:50])
     except Exception as e:
         log.warning("ai_task.neo4j_iam_analysis_error", path_string=path_string[:50], error=str(e))
+
+
+def _update_neo4j_threat_actor_mapping(
+    neo4j_driver,
+    scan_job_id: str,
+    path_string: str,
+    threat_actor_data: dict,
+) -> None:
+    """
+    Update Neo4j AttackPath node with threat actor TTP mapping.
+    """
+    try:
+        with neo4j_driver.session() as session:
+            session.run(
+                """
+                MATCH (p:AttackPath {scan_job_id: $sjid, path_string: $ps})
+                SET p.ai_threat_actors = $threat_actors,
+                    p.ai_mitre_mapping = $mitre_mapping
+                """,
+                sjid=scan_job_id,
+                ps=path_string,
+                threat_actors=json.dumps(threat_actor_data.get("threat_actor_matches", [])),
+                mitre_mapping=json.dumps(threat_actor_data.get("mitre_attack_cloud_matrix", {})),
+            )
+        log.info("ai_task.neo4j_threat_actor_updated", path_string=path_string[:50])
+    except Exception as e:
+        log.warning("ai_task.neo4j_threat_actor_error", path_string=path_string[:50], error=str(e))
+
+
+def _update_neo4j_blast_radius(
+    neo4j_driver,
+    scan_job_id: str,
+    path_string: str,
+    blast_radius_data: dict,
+) -> None:
+    """
+    Update Neo4j AttackPath node with blast radius quantification.
+    """
+    try:
+        with neo4j_driver.session() as session:
+            session.run(
+                """
+                MATCH (p:AttackPath {scan_job_id: $sjid, path_string: $ps})
+                SET p.ai_blast_radius = $blast_radius,
+                    p.ai_compromise_timeline = $timeline
+                """,
+                sjid=scan_job_id,
+                ps=path_string,
+                blast_radius=json.dumps(blast_radius_data.get("blast_radius_summary", {})),
+                timeline=json.dumps(blast_radius_data.get("compromise_timeline", {})),
+            )
+        log.info("ai_task.neo4j_blast_radius_updated", path_string=path_string[:50])
+    except Exception as e:
+        log.warning("ai_task.neo4j_blast_radius_error", path_string=path_string[:50], error=str(e))
 
 
 def _update_neo4j_path_risk_score(
@@ -270,6 +376,7 @@ def _update_neo4j_path_annotation(
             """
             MATCH (p:AttackPath {scan_job_id: $sjid, path_string: $ps})
             SET p.ai_explanation       = $explanation,
+                p.ai_remediation       = $remediation,
                 p.ai_attack_narrative  = $narrative,
                 p.ai_business_impact   = $impact,
                 p.ai_likelihood        = $likelihood,
@@ -278,6 +385,7 @@ def _update_neo4j_path_annotation(
             sjid=scan_job_id,
             ps=path_string,
             explanation=annotation.get("explanation", ""),
+            remediation=json.dumps(annotation.get("remediation_steps", [])),
             narrative=annotation.get("attack_narrative", ""),
             impact=annotation.get("business_impact", ""),
             likelihood=annotation.get("likelihood", ""),
@@ -521,6 +629,69 @@ def run_ai_analysis(self, scan_job_id: str) -> dict:
                 time.sleep(INTER_CALL_DELAY)
             except Exception as e:
                 log.warning("ai_task.iam_analysis_error", path=path.get("path_string"), error=str(e))
+
+        # 3c — Threat actor TTP mapping (for top critical paths)
+        # Maps attack paths to known APT groups and real-world incidents
+        threat_actor_paths = [p for p in paths if p.get("severity") in ("critical", "high")][:MAX_THREAT_ACTOR_MAP]
+
+        for path in threat_actor_paths:
+            try:
+                nodes_list = json.loads(path["path_nodes"]) if isinstance(path["path_nodes"], str) else path["path_nodes"]
+                edges_list = json.loads(path["path_edges"]) if isinstance(path["path_edges"], str) else path["path_edges"]
+
+                threat_actor_data = ai_engine.map_threat_actors(
+                    path_string=path["path_string"],
+                    path_nodes=nodes_list,
+                    path_edges=edges_list,
+                )
+
+                _update_path_threat_actor_mapping(db, path["id"], threat_actor_data)
+                _update_neo4j_threat_actor_mapping(neo4j_drv, scan_job_id, path["path_string"], threat_actor_data)
+                log.info("ai_task.threat_actor_mapped", path=path["path_string"][:50])
+                time.sleep(INTER_CALL_DELAY)
+
+            except Exception as e:
+                log.warning("ai_task.threat_actor_mapping_error", path=path.get("path_string"), error=str(e))
+
+        # 3d — Blast radius quantification (for top 3 highest-risk paths)
+        # Computes quantitative impact: how many resources compromised
+        blast_radius_paths = sorted(paths, key=lambda p: p.get("risk_score", 0), reverse=True)[:MAX_BLAST_RADIUS]
+
+        # Load all resources for blast radius calculation
+        all_resources = []
+        try:
+            with neo4j_drv.session() as neo4j_session:
+                result = neo4j_session.run(
+                    """
+                    MATCH (r:Resource {scan_job_id: $sjid})
+                    RETURN r.node_id AS node_id, r.node_type AS node_type,
+                           r.metadata_json AS metadata_json, r.public AS public
+                    """,
+                    sjid=scan_job_id,
+                )
+                all_resources = [dict(r) for r in result]
+        except Exception as e:
+            log.warning("ai_task.resource_load_error", error=str(e))
+
+        for path in blast_radius_paths:
+            try:
+                nodes_list = json.loads(path["path_nodes"]) if isinstance(path["path_nodes"], str) else path["path_nodes"]
+                edges_list = json.loads(path["path_edges"]) if isinstance(path["path_edges"], str) else path["path_edges"]
+
+                blast_radius_data = ai_engine.analyze_blast_radius(
+                    path_string=path["path_string"],
+                    path_nodes=nodes_list,
+                    path_edges=edges_list,
+                    all_resources=all_resources,
+                )
+
+                _update_path_blast_radius(db, path["id"], blast_radius_data)
+                _update_neo4j_blast_radius(neo4j_drv, scan_job_id, path["path_string"], blast_radius_data)
+                log.info("ai_task.blast_radius_analyzed", path=path["path_string"][:50])
+                time.sleep(INTER_CALL_DELAY)
+
+            except Exception as e:
+                log.warning("ai_task.blast_radius_error", path=path.get("path_string"), error=str(e))
 
         # 4 — Annotate top 3 nodes (with delay between each)
         results["nodes_annotated"] = _annotate_high_risk_nodes(

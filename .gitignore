@@ -1,116 +1,98 @@
-# Python
+# =====================
+# Portfolio .gitignore
+# Cloud Threat Mapper
+# =====================
+
+# --- Python ---
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.env
-
-# Node
-node_modules/
-dist/
-build/
-
-# Docker
-*.log
-docker-data/
-volumes/
-
-# IDE
-.vscode/
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Env files
-.env
-
-# Database / local data
-*.db
-*.sqlite3
-
-# Neo4j / Postgres volumes
-neo4j_data/
-postgres_data/
-redis_data/
-
-# Aider
-.aider*
-
-# Memory / Sessions (personal context, not code)
-memory/sessions/
-
-# Artifacts (generated scan data, can be large)
-artifacts/
-
-# Local development
-*.bak
-*.tmp
-*.swp
-*~
-
-# Logs
-logs/
-*.log
-
-# Coverage / testing
-htmlcov/
-.coverage
-.pytest_cache/
-
-# Build artifacts
 *.egg-info/
 .eggs/
 
-# Compiled files
-*.so
-*.o
-*.a
-
-# Secrets (beyond .env)
+# --- Environment & Secrets ---
+.env
 *.pem
 *.key
 *.crt
 credentials.json
+*credentials*
 service-account*.json
 
-# AI Assistant context (personal workflow, not project code)
-claude.md
-.claude/
+# --- Node.js ---
+node_modules/
+dist/
+build/
 
-# Documentation (study guides, demo prep - not core code)
-docs/
+# --- Docker ---
+*.log
+docker-data/
+volumes/
 
-# Research materials (personal analysis, not project code)
-docs/research/
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-# Cleanup scripts (personal operational scripts)
-cleanup_*.ps1
-cleanup_*.sh
+# --- OS ---
+.DS_Store
+Thumbs.db
 
-# Debug / development scripts
-debug_graph.py
+# --- Database & Data Volumes ---
+*.db
+*.sqlite3
+neo4j_data/
+postgres_data/
+redis_data/
 
-# Research generation scripts (personal workflow)
-generate_research_aspect.py
-research_aspect.md
+# --- Generated Scan Data ---
+artifacts/
 
-# AWS CLI installer (downloaded binary, use package manager instead)
+# --- Temporary Files ---
+*.bak
+*.tmp
+*.temp
+
+# --- Logs ---
+logs/
+*.log
+
+# --- Testing ---
+htmlcov/
+.coverage
+.pytest_cache/
+
+# --- AWS CLI Installer ---
 awscliv2.zip
 
-# Aider history (personal chat history)
-.aider.chat.history.md
-.aider.input.history
+# --- Personal/Workflow Files ---
+claude.md
+.claude/
+.aider*
+cleanup_*.ps1
+cleanup_*.sh
+debug_graph.py
+generate_research_aspect.py
+research_aspect.md
+memory/sessions/
 
-# Example env should be kept, but ensure real .env is ignored
-!.env.example
-
-# Test scripts (adhoc testing, not formal test suite)
-backend/test_api.py
-backend/test_schema.py
-
-# PowerPoint exports (personal research materials)
+# --- PowerPoint & Presentations ---
 ppt/
 *.pptx
 *.ppt
+
+# --- Generated Paper Binaries (keep source .py scripts) ---
+*.docx
+
+# --- Research Images (keep in images/ folder) ---
+# Images are tracked, but Zone.Identifier (Windows metadata) should not be
+*:Zone.Identifier
+
+# --- Research Paper Assets (track images, not generation scripts) ---
+!docs/research/images/
+docs/research/*.py
+docs/research/*.md
+docs/research/*.docx

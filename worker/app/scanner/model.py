@@ -31,6 +31,7 @@ class EC2Instance:
     public_ip: str | None
     iam_instance_profile_arn: str | None
     iam_role_name: str | None           # Extracted from profile ARN
+    iam_role_arn: str | None            # Resolved role ARN from instance profile
     security_group_ids: list[str]
     tags: dict[str, str]
     platform: str | None                # "windows" or None (linux)
@@ -61,6 +62,7 @@ class IAMUser:
     access_keys: list[dict]             # List of {key_id, status, last_used}
     attached_policy_arns: list[str]
     inline_policies: list[dict]
+    managed_policies: list[dict]        # List of {arn, name, document}
     groups: list[str]
     tags: dict[str, str]
 
@@ -144,6 +146,42 @@ class LambdaFunction:
 
 
 @dataclass
+class NATGateway:
+    nat_gateway_id: str
+    vpc_id: str
+    subnet_id: str                      # NAT must be in a public subnet
+    state: str                          # pending | available | failed | deleting | deleted
+    connectivity_type: str              # public | private
+    public_ip: str | None
+    tags: dict[str, str]
+    region: str
+
+
+@dataclass
+class InternetGateway:
+    igw_id: str
+    vpc_id: str | None                  # Can be unattached (detached)
+    state: str
+    tags: dict[str, str]
+    region: str
+
+
+@dataclass
+class VPCEndpoint:
+    endpoint_id: str
+    vpc_id: str
+    service_name: str                   # com.amazonaws.region.s3, etc.
+    endpoint_type: str                  # Gateway | Interface
+    subnet_ids: list[str]               # For Interface endpoints
+    security_group_ids: list[str]       # For Interface endpoints
+    policy_document: dict | None        # Endpoint policy
+    private_dns_enabled: bool           # For Interface endpoints
+    state: str                          # pending | available | failed | deleting | deleted
+    tags: dict[str, str]
+    region: str
+
+
+@dataclass
 class Relationship:
     """A directed relationship between two resources."""
     source_id: str
@@ -175,6 +213,9 @@ class InfrastructureModel:
     security_groups: list[SecurityGroup] = field(default_factory=list)
     rds_instances: list[RDSInstance] = field(default_factory=list)
     lambda_functions: list[LambdaFunction] = field(default_factory=list)
+    nat_gateways: list[NATGateway] = field(default_factory=list)
+    internet_gateways: list[InternetGateway] = field(default_factory=list)
+    vpc_endpoints: list[VPCEndpoint] = field(default_factory=list)
 
     # Relationships (populated by the relationship builder)
     relationships: list[Relationship] = field(default_factory=list)
@@ -194,6 +235,9 @@ class InfrastructureModel:
             + len(self.security_groups)
             + len(self.rds_instances)
             + len(self.lambda_functions)
+            + len(self.nat_gateways)
+            + len(self.internet_gateways)
+            + len(self.vpc_endpoints)
         )
 
     def add_error(self, service: str, operation: str, error: str) -> None:

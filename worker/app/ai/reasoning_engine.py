@@ -32,6 +32,8 @@ from app.ai.prompts import (
     remediation_roadmap_prompt,
     executive_summary_prompt,
     deep_iam_analysis_prompt,
+    threat_actor_mapping_prompt,
+    blast_radius_analysis_prompt,
 )
 
 log = structlog.get_logger()
@@ -226,6 +228,61 @@ class AIReasoningEngine:
             "risk_rating":       "Unknown",
             "key_metrics":       {},
             "ai_error":          True,
+        }
+
+    def map_threat_actors(
+        self,
+        path_string: str,
+        path_nodes: list[dict],
+        path_edges: list[dict],
+    ) -> dict[str, Any]:
+        """
+        Map attack path to known threat actors and real-world incidents.
+        This provides research context by connecting findings to APT groups and breaches.
+        """
+        prompt = threat_actor_mapping_prompt(
+            path_string=path_string,
+            path_nodes=path_nodes,
+            path_edges=path_edges,
+        )
+        result = self._call_with_fallback(
+            prompt,
+            max_tokens=TOKEN_BUDGETS["deep_iam_analysis"],  # Same budget
+            call_name="threat_actor_mapping",
+        )
+        return result or {
+            "threat_actor_matches": [],
+            "real_world_incidents": [],
+            "mitre_attack_cloud_matrix": {},
+            "ai_error": True,
+        }
+
+    def analyze_blast_radius(
+        self,
+        path_string: str,
+        path_nodes: list[dict],
+        path_edges: list[dict],
+        all_resources: list[dict],
+    ) -> dict[str, Any]:
+        """
+        Quantify blast radius — how many resources compromised if path exploited.
+        """
+        prompt = blast_radius_analysis_prompt(
+            path_string=path_string,
+            path_nodes=path_nodes,
+            path_edges=path_edges,
+            all_resources=all_resources,
+        )
+        result = self._call_with_fallback(
+            prompt,
+            max_tokens=TOKEN_BUDGETS["deep_iam_analysis"],
+            call_name="blast_radius_analysis",
+        )
+        return result or {
+            "blast_radius_summary": {},
+            "compromise_timeline": {},
+            "attack_chain_depth": {},
+            "ai_error": True,
         }
 
     # ── Internal ───────────────────────────────────────────────────────────────

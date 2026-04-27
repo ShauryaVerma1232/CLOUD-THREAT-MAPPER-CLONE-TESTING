@@ -9,7 +9,7 @@ import CytoscapeComponent from 'react-cytoscapejs'
 cytoscape.use(fcose)
 cytoscape.use(dagre)
 
-import { AlertTriangle, X, Layers, ZoomIn, ZoomOut, Maximize, Eye, EyeOff, Box, Target, ShieldAlert, ChevronRight, Radio, Network, Lock, Unlock, FileText, Zap, CheckCircle, Download, Play, Pause, StepForward } from 'lucide-react'
+import { AlertTriangle, X, Layers, ZoomIn, ZoomOut, Maximize, Eye, EyeOff, Box, Target, ShieldAlert, ChevronRight, Radio, Network, Lock, Unlock, FileText, Zap, CheckCircle, Download, Play, Pause, StepForward, RefreshCw } from 'lucide-react'
 import { graphApi, blastRadiusApi, aiApi, type CyNode, type AttackPath, type BlastRadiusResult, type AISummary } from '../api/scanApi'
 import clsx from 'clsx'
 
@@ -303,7 +303,12 @@ function truncateLabel(label: string, maxLength = 20): string {
 
 // Check if a resource is a CloudGoat resource
 function isCloudGoatResource(nodeId: string, nodeType?: string): boolean {
+  // Always include INTERNET node - it's the attack surface entry point
+  if (nodeId === 'INTERNET' || nodeType === 'INTERNET') {
+    return true
+  }
   // CloudGoat resources typically have names starting with 'cg-' or 'cg_'
+  // or IAM users created by CloudGoat (shepard, solus, wrex, jacktheripper)
   const cloudGoatPrefixes = ['cg-', 'cg_', 'shepard', 'solus', 'wrex', 'jacktheripper']
   const lowerId = nodeId.toLowerCase()
   return cloudGoatPrefixes.some(prefix => lowerId.startsWith(prefix) || lowerId.includes(prefix))
@@ -343,6 +348,9 @@ export default function GraphPage() {
   const [animationPlaying, setAnimationPlaying] = useState(false)
   const [currentStep, setCurrentStep] = useState(0)
 
+  // Graph build state
+  const [isBuildingGraph, setIsBuildingGraph] = useState(false)
+
   // Fetch scan details for header
   const { data: scanDetails } = useQuery({
     queryKey: ['scan-details', scanId],
@@ -353,27 +361,32 @@ export default function GraphPage() {
     staleTime: Infinity,
   })
 
-  const { data: graphData, isLoading, error: graphError } = useQuery({
+  const { data: graphData, isLoading, error: graphError, refetch: refetchGraph } = useQuery({
     queryKey: ['graph', scanId],
     enabled: !!scanId,
-    retry: false,
-
+    retry: 1, // Only 1 retry for faster load
     refetchOnWindowFocus: false,
     refetchOnMount: false,
     refetchOnReconnect: false,
-    staleTime: Infinity,
-
+    staleTime: 30000, // 30 seconds stale time
     queryFn: () => graphApi.getGraph(scanId).then(r => r.data),
   })
 
-  const { data: attackPathsData, isLoading: attackPathsLoading } = useQuery({
+  const { data: attackPathsData, isLoading: attackPathsLoading, refetch: refetchAttackPaths } = useQuery({
     queryKey: ['attack-paths', scanId],
     enabled: !!scanId,
-    retry: false,
+    retry: 5, // Retry 5 times for attack paths (graph build is async)
     refetchOnWindowFocus: false,
     refetchOnMount: false,
-    staleTime: Infinity,
-    queryFn: () => graphApi.getPaths(scanId).then(r => r.data),
+    staleTime: 10000, // 10 seconds stale time
+    queryFn: async () => {
+      const result = await graphApi.getPaths(scanId).then(r => r.data)
+      // If no paths found, throw error to trigger retry (graph might still be building)
+      if (!result.items || result.items.length === 0) {
+        throw new Error('No attack paths found yet - graph may still be building')
+      }
+      return result
+    },
   })
 
   // Auto-highlight the first (most critical) attack path when data loads
@@ -392,7 +405,7 @@ export default function GraphPage() {
 
   // Fetch AI Summary when panel is opened
   const fetchAiSummary = useCallback(async () => {
-    if (!scanId || aiSummaryLoading || aiSummary) return
+    if (!scanId || aiSummaryLoading) return
     setAiSummaryLoading(true)
     try {
       const result = await aiApi.getSummary(scanId)
@@ -402,10 +415,12 @@ export default function GraphPage() {
       }
     } catch (error) {
       console.error('Failed to fetch AI summary:', error)
+      // Clear cached summary on error to allow retry
+      setAiSummary(null)
     } finally {
       setAiSummaryLoading(false)
     }
-  }, [scanId, aiSummaryLoading, aiSummary])
+  }, [scanId, aiSummaryLoading])
 
 
   const handleCyInit = useCallback((cy: any) => {
@@ -625,6 +640,14 @@ export default function GraphPage() {
       return []
     }
 
+    // Debug: Log all node IDs and edge references
+    console.log('[GraphPage] Raw graph data:', {
+      nodeCount: graphData.nodes.length,
+      edgeCount: graphData.edges.length,
+      nodeIds: graphData.nodes.map(n => n?.data?.id).slice(0, 20),
+      edgeRefs: graphData.edges.map(e => `${e?.data?.source} -> ${e?.data?.target}`).slice(0, 20),
+    })
+
     // Build parent-child relationships for BloodHound-style clustering
     // VPCs contain Subnets, Subnets contain EC2/RDS/Lambda
     const nodeMap = new Map<string, any>()
@@ -695,6 +718,7 @@ export default function GraphPage() {
     // Deduplicate edges by source-target pair (only include edges between visible nodes)
     const edgeMap = new Map<string, any>()
     let edgeId = 0
+    let skippedEdges = 0
     for (const edge of (graphData.edges ?? [])) {
       const source = edge?.data?.source
       const target = edge?.data?.target
@@ -703,6 +727,18 @@ export default function GraphPage() {
 
       // Skip edges connected to filtered-out nodes
       if (showOnlyCloudGoat && (!isCloudGoatResource(source) || !isCloudGoatResource(target))) {
+        console.log('[GraphPage] Skipping edge (not CloudGoat):', source, '->', target)
+        continue
+      }
+
+      // CRITICAL: Skip edges if source or target nodes were not added to nodeMap
+      // This prevents "Cannot create edge with nonexistant source" errors
+      if (!nodeMap.has(source) || !nodeMap.has(target)) {
+        console.warn('[GraphPage] Skipping edge (node missing from nodeMap):',
+          source, '->', target,
+          'sourceInMap:', nodeMap.has(source),
+          'targetInMap:', nodeMap.has(target))
+        skippedEdges++
         continue
       }
 
@@ -719,6 +755,7 @@ export default function GraphPage() {
         }
       })
     }
+    console.log('[GraphPage] Edge processing complete:', edgeMap.size, 'edges,', skippedEdges, 'skipped')
 
     const result = [...Array.from(nodeMap.values()), ...Array.from(edgeMap.values())]
     console.log('[GraphPage] Rendered graph with', nodeMap.size, 'nodes,', edgeMap.size, 'edges', showOnlyCloudGoat ? '(CloudGoat only)' : '(all resources)')
@@ -752,6 +789,22 @@ export default function GraphPage() {
     { type: 'trusts', label: 'Trust Relationship', color: '#A855F7' },
     { type: 'connected_to', label: 'Network Connection', color: '#64748B' },
   ]
+
+  const handleBuildGraph = async () => {
+    setIsBuildingGraph(true)
+    try {
+      await graphApi.build(scanId)
+      // Refetch graph and attack paths after build is triggered
+      setTimeout(() => {
+        refetchGraph()
+        refetchAttackPaths()
+      }, 2000)
+    } catch (error) {
+      console.error('Failed to build graph:', error)
+    } finally {
+      setIsBuildingGraph(false)
+    }
+  }
 
   const handleZoomIn = () => {
     if (cyRef.current) cyRef.current.zoom({ level: Math.min(cyRef.current.zoom() * 1.3, 2.5) })
@@ -824,6 +877,26 @@ export default function GraphPage() {
         <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
           <div className="bg-slate-900/90 backdrop-blur rounded-lg border border-slate-700 p-2 shadow-xl">
             <div className="flex flex-col gap-1">
+              <button
+                onClick={handleBuildGraph}
+                disabled={isBuildingGraph}
+                className={clsx(
+                  "p-2 rounded transition-colors",
+                  isBuildingGraph
+                    ? "bg-blue-400/20 text-blue-400 cursor-wait"
+                    : "hover:bg-slate-800 text-slate-400 hover:text-white"
+                )}
+                title="Build graph and find attack paths"
+              >
+                {isBuildingGraph ? <Pause size={18} /> : <Play size={18} />}
+              </button>
+              <button
+                onClick={() => { refetchGraph(); refetchAttackPaths(); }}
+                className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors"
+                title="Refresh graph and attack paths"
+              >
+                <RefreshCw size={18} />
+              </button>
               <button
                 onClick={handleZoomIn}
                 className="p-2 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors"
@@ -1015,33 +1088,18 @@ export default function GraphPage() {
         {/* Attack Path Detail Panel - Right side, below AI Report panel */}
         {selectedAttackPath && (
           <div className="absolute top-24 right-4 z-50 w-96">
-            <div className="bg-slate-900/95 backdrop-blur rounded-lg border border-red-400/30 shadow-2xl" style={{ maxHeight: 'calc(100vh - 12rem)', overflowY: 'auto' }}>
+            <div className="bg-slate-900/95 backdrop-blur rounded-lg border border-red-400/30 shadow-2xl relative" style={{ maxHeight: 'calc(100vh - 12rem)', overflowY: 'auto' }}>
               {/* Close button */}
               <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  e.preventDefault()
+                onClick={() => {
                   setSelectedAttackPath(null)
+                  userClosedAttackPathRef.current = true
                   if (cyRef.current) {
                     cyRef.current.elements().removeClass('attack-path attack-path-node attack-path-edge-highlight')
                   }
                 }}
-                className="absolute top-3 right-3"
-                style={{
-                  zIndex: 100,
-                  pointerEvents: 'auto',
-                  color: '#94a3b8',
-                  padding: '4px',
-                  borderRadius: '4px'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.color = '#fff'
-                  e.currentTarget.style.backgroundColor = '#1e293b'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.color = '#94a3b8'
-                  e.currentTarget.style.backgroundColor = 'transparent'
-                }}
+                className="absolute top-3 right-3 z-[100] hover:bg-slate-800 rounded p-1 text-slate-400 hover:text-white transition-colors"
+                style={{ pointerEvents: 'auto' }}
                 title="Close"
               >
                 <X size={20} strokeWidth={2.5} />
@@ -1105,6 +1163,208 @@ export default function GraphPage() {
                   <span>Hops:</span>
                   <span className="text-white font-mono">{selectedAttackPath.hop_count}</span>
                 </div>
+
+                {/* AI Analysis Sections */}
+                {selectedAttackPath.ai_privilege_escalation?.detected && (
+                  <div className="mt-4 pt-4 border-t border-slate-700">
+                    <div className="flex items-center gap-2 mb-3">
+                      <ShieldAlert size={16} className="text-red-400" />
+                      <h4 className="text-sm font-semibold text-white">IAM Privilege Escalation Detected</h4>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="p-2 bg-red-500/10 border border-red-500/30 rounded">
+                        <p className="text-xs text-red-300 font-medium">
+                          {selectedAttackPath.ai_privilege_escalation.true_risk_assessment || 'Privilege escalation risk detected'}
+                        </p>
+                      </div>
+
+                      {selectedAttackPath.ai_escalation_techniques && selectedAttackPath.ai_escalation_techniques.length > 0 && (
+                        <div>
+                          <p className="text-xs text-slate-400 mb-2">Techniques ({selectedAttackPath.ai_escalation_techniques.length}):</p>
+                          <div className="space-y-2 max-h-48 overflow-y-auto">
+                            {selectedAttackPath.ai_escalation_techniques.map((tech, idx) => (
+                              <div key={idx} className="p-2 bg-slate-800 rounded border border-slate-700">
+                                <p className="text-xs font-medium text-white">{tech.technique_name}</p>
+                                <p className="text-xs text-slate-400 mt-1">{tech.category}</p>
+                                <div className="mt-2 space-y-1">
+                                  <div className="flex items-center gap-1">
+                                    <Lock size={10} className="text-amber-400" />
+                                    <code className="text-xs text-amber-400 truncate">{tech.required_permissions.join(', ')}</code>
+                                  </div>
+                                  <p className="text-xs text-slate-500">{tech.why_dangerous}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {selectedAttackPath.ai_remediation_priority && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400">Priority:</span>
+                          <span className={clsx(
+                            'text-xs font-bold px-2 py-0.5 rounded',
+                            selectedAttackPath.ai_remediation_priority === 'immediate' ? 'bg-red-500/20 text-red-400' :
+                            selectedAttackPath.ai_remediation_priority === 'high' ? 'bg-orange-500/20 text-orange-400' :
+                            'bg-slate-700 text-slate-300'
+                          )}>
+                            {selectedAttackPath.ai_remediation_priority.toUpperCase()}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Threat Actor TTP Mapping */}
+                {selectedAttackPath.ai_threat_actors && selectedAttackPath.ai_threat_actors.length > 0 && (
+                  <div className="mt-4 pt-4 border-t border-slate-700">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Target size={16} className="text-purple-400" />
+                      <h4 className="text-sm font-semibold text-white">Threat Actor TTP Mapping</h4>
+                    </div>
+
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {selectedAttackPath.ai_threat_actors.map((actor, idx) => (
+                        <div key={idx} className="p-2 bg-slate-800 rounded border border-slate-700">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs font-medium text-white">{actor.actor_name}</p>
+                            <span className={clsx(
+                              'text-xs px-1.5 py-0.5 rounded',
+                              actor.similarity === 'high' ? 'bg-red-500/20 text-red-400' :
+                              actor.similarity === 'medium' ? 'bg-orange-500/20 text-orange-400' :
+                              'bg-slate-700 text-slate-400'
+                            )}>
+                              {actor.similarity} match
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-400 mt-1">{actor.actor_type}</p>
+                          {actor.overlapping_techniques.length > 0 && (
+                            <div className="mt-1.5">
+                              <p className="text-xs text-slate-500">Overlapping:</p>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {actor.overlapping_techniques.map((t, tIdx) => (
+                                  <span key={tIdx} className="text-xs text-purple-300 bg-purple-500/10 px-1 rounded">
+                                    {t}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {actor.source && (
+                            <p className="text-xs text-slate-500 mt-1.5 italic">Source: {actor.source}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    {selectedAttackPath.ai_mitre_mapping && (
+                      <div className="mt-3 p-2 bg-slate-800 rounded border border-slate-700">
+                        <p className="text-xs text-slate-400 mb-2">MITRE ATT&CK Cloud Matrix:</p>
+                        <div className="space-y-1">
+                          {selectedAttackPath.ai_mitre_mapping.tactics.map((tactic, idx) => (
+                            <div key={idx} className="flex items-center gap-2">
+                              <span className="text-xs text-purple-300 font-mono">{tactic.id}</span>
+                              <span className="text-xs text-white">{tactic.name}</span>
+                              {tactic.techniques_used.length > 0 && (
+                                <span className="text-xs text-slate-500">({tactic.techniques_used.length} techniques)</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Blast Radius Quantification */}
+                {selectedAttackPath.ai_blast_radius && (
+                  <div className="mt-4 pt-4 border-t border-slate-700">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Radio size={16} className="text-orange-400" />
+                      <h4 className="text-sm font-semibold text-white">Blast Radius</h4>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="p-2 bg-slate-800 rounded">
+                        <p className="text-xs text-slate-500">Resources at Risk</p>
+                        <p className="text-lg font-mono text-white">{selectedAttackPath.ai_blast_radius.total_resources_at_risk}</p>
+                      </div>
+                      <div className="p-2 bg-slate-800 rounded">
+                        <p className="text-xs text-slate-500">IAM Principals</p>
+                        <p className="text-lg font-mono text-white">{selectedAttackPath.ai_blast_radius.iam_principals_accessible}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 space-y-2">
+                      <div className="p-2 bg-slate-800 rounded border border-slate-700">
+                        <p className="text-xs text-slate-400 mb-1">Compute Resources</p>
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="text-slate-500">EC2:</span>
+                          <span className="text-white font-mono">{selectedAttackPath.ai_blast_radius.compute_resources_at_risk.ec2_instances}</span>
+                          {selectedAttackPath.ai_blast_radius.compute_resources_at_risk.can_deploy_code && (
+                            <span className="text-red-400">(can deploy code)</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="text-slate-500">Lambda:</span>
+                          <span className="text-white font-mono">{selectedAttackPath.ai_blast_radius.compute_resources_at_risk.lambda_functions}</span>
+                        </div>
+                      </div>
+
+                      <div className="p-2 bg-slate-800 rounded border border-slate-700">
+                        <p className="text-xs text-slate-400 mb-1">Data Assets</p>
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="text-slate-500">S3 Buckets:</span>
+                          <span className="text-white font-mono">{selectedAttackPath.ai_blast_radius.data_assets_accessible.s3_buckets}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="text-slate-500">RDS:</span>
+                          <span className="text-white font-mono">{selectedAttackPath.ai_blast_radius.data_assets_accessible.rds_instances}</span>
+                        </div>
+                      </div>
+
+                      <div className="p-2 bg-slate-800 rounded border border-slate-700">
+                        <p className="text-xs text-slate-400 mb-1">Network Impact</p>
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="text-slate-500">VPCs:</span>
+                          <span className="text-white font-mono">{selectedAttackPath.ai_blast_radius.network_infrastructure.vpcs_affected}</span>
+                          {selectedAttackPath.ai_blast_radius.network_infrastructure.can_disable_logging && (
+                            <span className="text-red-400">(can disable logging)</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {selectedAttackPath.ai_compromise_timeline && (
+                      <div className="mt-3 p-2 bg-slate-800 rounded border border-slate-700">
+                        <p className="text-xs text-slate-400 mb-2">Estimated Compromise Timeline</p>
+                        <div className="space-y-1 text-xs">
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Initial Access:</span>
+                            <span className="text-white font-mono">{selectedAttackPath.ai_compromise_timeline.initial_access}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Privilege Escalation:</span>
+                            <span className="text-white font-mono">{selectedAttackPath.ai_compromise_timeline.privilege_escalation}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Lateral Movement:</span>
+                            <span className="text-white font-mono">{selectedAttackPath.ai_compromise_timeline.lateral_movement}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Full Compromise:</span>
+                            <span className="text-white font-mono">{selectedAttackPath.ai_compromise_timeline.full_compromise}</span>
+                          </div>
+                        </div>
+                        {selectedAttackPath.ai_compromise_timeline.confidence && (
+                          <p className="text-xs text-slate-500 mt-2 italic">Confidence: {selectedAttackPath.ai_compromise_timeline.confidence}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Step-by-Step Walkthrough - Removed to reduce panel height */}
               </div>
@@ -1424,6 +1684,109 @@ export default function GraphPage() {
                           <p className="text-sm text-slate-200 leading-relaxed">
                             {aiSummary.remediation_roadmap.overall_risk_narrative}
                           </p>
+                        </div>
+                      )}
+
+                      {/* Enriched AI Analysis Section */}
+                      {aiSummary.enriched_analysis && aiSummary.enriched_analysis.length > 0 && (
+                        <div className="mt-4 space-y-4">
+                          <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                            <Target size={14} className="text-cyan-400" />
+                            Enhanced Threat Intelligence
+                          </h4>
+
+                          {aiSummary.enriched_analysis.map((analysis, idx) => (
+                            <div key={idx} className="p-3 bg-slate-800/50 border border-slate-700 rounded-lg space-y-3">
+                              <p className="text-xs text-slate-400 font-mono truncate">{analysis.path_string}</p>
+
+                              {/* Threat Actors */}
+                              {analysis.threat_actors && analysis.threat_actors.length > 0 && (
+                                <div>
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <Target size={12} className="text-purple-400" />
+                                    <span className="text-xs font-medium text-purple-300">Threat Actor TTP Mapping</span>
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    {analysis.threat_actors.map((actor, aIdx) => (
+                                      <div key={aIdx} className="text-xs bg-purple-500/10 p-1.5 rounded">
+                                        <span className="text-purple-200 font-medium">{actor.actor_name}</span>
+                                        <span className="text-purple-400/70 ml-2">({actor.actor_type})</span>
+                                        {actor.similarity === 'high' && <span className="text-red-400 ml-2">⚠ High match</span>}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Blast Radius */}
+                              {analysis.blast_radius && (
+                                <div>
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <Radio size={12} className="text-orange-400" />
+                                    <span className="text-xs font-medium text-orange-300">Blast Radius</span>
+                                  </div>
+                                  <div className="grid grid-cols-3 gap-2 text-xs">
+                                    <div className="bg-slate-900 p-1.5 rounded text-center">
+                                      <span className="text-slate-500 block">Resources</span>
+                                      <span className="text-white font-mono">{analysis.blast_radius.total_resources_at_risk}</span>
+                                    </div>
+                                    <div className="bg-slate-900 p-1.5 rounded text-center">
+                                      <span className="text-slate-500 block">Compute</span>
+                                      <span className="text-white font-mono">{analysis.blast_radius.compute_resources_at_risk?.ec2_instances || 0} EC2</span>
+                                    </div>
+                                    <div className="bg-slate-900 p-1.5 rounded text-center">
+                                      <span className="text-slate-500 block">Data</span>
+                                      <span className="text-white font-mono">{analysis.blast_radius.data_assets_accessible?.s3_buckets || 0} S3</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* IAM Escalation */}
+                              {analysis.privilege_escalation?.detected && (
+                                <div>
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <ShieldAlert size={12} className="text-red-400" />
+                                    <span className="text-xs font-medium text-red-300">IAM Privilege Escalation</span>
+                                  </div>
+                                  <div className="text-xs bg-red-500/10 p-1.5 rounded">
+                                    <span className="text-red-200">{analysis.escalation_techniques?.length || 0} techniques detected</span>
+                                    {analysis.privilege_escalation.remediation_priority === 'immediate' && (
+                                      <span className="text-red-400 ml-2 font-bold">⚠ IMMEDIATE ACTION</span>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Compromise Timeline */}
+                              {analysis.compromise_timeline && (
+                                <div>
+                                  <div className="flex items-center gap-2 mb-2">
+                                    <FileText size={12} className="text-amber-400" />
+                                    <span className="text-xs font-medium text-amber-300">Estimated Compromise Timeline</span>
+                                  </div>
+                                  <div className="grid grid-cols-4 gap-1 text-xs">
+                                    <div className="text-center">
+                                      <span className="text-slate-500 block text-[10px]">Access</span>
+                                      <span className="text-amber-200 font-mono">{analysis.compromise_timeline.initial_access}</span>
+                                    </div>
+                                    <div className="text-center">
+                                      <span className="text-slate-500 block text-[10px]">Escalation</span>
+                                      <span className="text-amber-200 font-mono">{analysis.compromise_timeline.privilege_escalation}</span>
+                                    </div>
+                                    <div className="text-center">
+                                      <span className="text-slate-500 block text-[10px]">Lateral</span>
+                                      <span className="text-amber-200 font-mono">{analysis.compromise_timeline.lateral_movement}</span>
+                                    </div>
+                                    <div className="text-center">
+                                      <span className="text-slate-500 block text-[10px]">Full</span>
+                                      <span className="text-amber-200 font-mono">{analysis.compromise_timeline.full_compromise}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ))}
                         </div>
                       )}
                     </>

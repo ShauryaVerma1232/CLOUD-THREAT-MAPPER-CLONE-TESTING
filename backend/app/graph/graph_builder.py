@@ -284,6 +284,55 @@ def build_graph(artifact_path: Path) -> nx.DiGraph:
                 src=src, tgt=tgt, missing_src=src not in G, missing_tgt=tgt not in G
             )
 
+    # ── Add edges from INTERNET to public-facing resources ────────────────────
+    # EC2 instances with public IPs
+    for node_id, attrs in G.nodes(data=True):
+        if attrs.get("node_type") == NT_EC2 and attrs.get("public", False):
+            G.add_edge(
+                "INTERNET", node_id,
+                edge_type=ET_EXPOSES,
+                weight=1.0,
+                validated=False,
+                exposure_reason="public_ip",
+            )
+            log.debug("graph_builder.internet_edge", target=node_id, reason="public_ip")
+
+    # Security groups with public ingress (0.0.0.0/0)
+    for node_id, attrs in G.nodes(data=True):
+        if attrs.get("node_type") == NT_SG and attrs.get("public", False):
+            G.add_edge(
+                "INTERNET", node_id,
+                edge_type=ET_EXPOSES,
+                weight=1.0,
+                validated=False,
+                exposure_reason="public_ingress",
+            )
+            log.debug("graph_builder.internet_edge", target=node_id, reason="public_ingress")
+
+    # Public S3 buckets
+    for node_id, attrs in G.nodes(data=True):
+        if attrs.get("node_type") == NT_S3 and attrs.get("public", False):
+            G.add_edge(
+                "INTERNET", node_id,
+                edge_type=ET_EXPOSES,
+                weight=1.0,
+                validated=False,
+                exposure_reason="public_bucket",
+            )
+            log.debug("graph_builder.internet_edge", target=node_id, reason="public_bucket")
+
+    # Publicly accessible RDS instances
+    for node_id, attrs in G.nodes(data=True):
+        if attrs.get("node_type") == NT_RDS and attrs.get("public", False):
+            G.add_edge(
+                "INTERNET", node_id,
+                edge_type=ET_EXPOSES,
+                weight=1.0,
+                validated=False,
+                exposure_reason="publicly_accessible",
+            )
+            log.debug("graph_builder.internet_edge", target=node_id, reason="publicly_accessible")
+
     node_count = G.number_of_nodes()
     edge_count = G.number_of_edges()
     log.info("graph_builder.done", nodes=node_count, edges=edge_count)

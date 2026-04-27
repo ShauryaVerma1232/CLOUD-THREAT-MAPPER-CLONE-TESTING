@@ -22,16 +22,22 @@ import structlog
 log = structlog.get_logger()
 
 # ── Node type constants ────────────────────────────────────────────────────────
-NT_INTERNET  = "INTERNET"
-NT_EC2       = "EC2"
-NT_IAM_ROLE  = "IAM_ROLE"
-NT_IAM_USER  = "IAM_USER"
-NT_S3        = "S3_BUCKET"
-NT_VPC       = "VPC"
-NT_SUBNET    = "SUBNET"
-NT_SG        = "SECURITY_GROUP"
-NT_RDS       = "RDS"
-NT_LAMBDA    = "LAMBDA"
+NT_INTERNET       = "INTERNET"
+NT_EC2            = "EC2"
+NT_IAM_ROLE       = "IAM_ROLE"
+NT_IAM_USER       = "IAM_USER"
+NT_S3             = "S3_BUCKET"
+NT_VPC            = "VPC"
+NT_SUBNET         = "SUBNET"
+NT_SG             = "SECURITY_GROUP"
+NT_RDS            = "RDS"
+NT_LAMBDA         = "LAMBDA"
+NT_NAT_GATEWAY    = "NAT_GATEWAY"
+NT_IGW            = "INTERNET_GATEWAY"
+NT_VPC_ENDPOINT   = "VPC_ENDPOINT"
+NT_EC2_CREATE     = "EC2_CREATE_CAPABILITY"
+NT_LAMBDA_CREATE  = "LAMBDA_CREATE_CAPABILITY"
+NT_IAM_MODIFY     = "IAM_MODIFY_CAPABILITY"
 
 # ── Edge type constants ────────────────────────────────────────────────────────
 ET_EXPOSES      = "exposes"
@@ -40,22 +46,31 @@ ET_CAN_ACCESS   = "can_access"
 ET_CONNECTED    = "connected_to"
 ET_TRUSTS       = "trusts"
 ET_NETWORK      = "network_access"
+ET_CAN_CREATE   = "can_create"
+ET_CAN_MODIFY   = "can_modify"
+ET_ROUTES_VIA   = "routes_via"
 
 # ── High-value target node types (used in path finding) ───────────────────────
-HIGH_VALUE_TYPES = {NT_S3, NT_RDS, NT_IAM_ROLE}
+HIGH_VALUE_TYPES = {NT_S3, NT_RDS, NT_IAM_ROLE, NT_IAM_MODIFY, NT_EC2_CREATE, NT_LAMBDA_CREATE}
 
 # ── Risk weights per resource type ────────────────────────────────────────────
 IMPACT_WEIGHTS = {
-    NT_S3:      0.80,
-    NT_RDS:     0.90,
-    NT_IAM_ROLE: 0.70,
-    NT_EC2:     0.50,
-    NT_LAMBDA:  0.55,
-    NT_SUBNET:  0.20,
-    NT_VPC:     0.20,
-    NT_SG:      0.15,
-    NT_INTERNET: 0.0,
-    NT_IAM_USER: 0.60,
+    NT_S3:             0.80,
+    NT_RDS:            0.90,
+    NT_IAM_ROLE:       0.70,
+    NT_EC2:            0.50,
+    NT_LAMBDA:         0.55,
+    NT_SUBNET:         0.20,
+    NT_VPC:            0.20,
+    NT_SG:             0.15,
+    NT_INTERNET:       0.0,
+    NT_IAM_USER:       0.60,
+    NT_NAT_GATEWAY:    0.65,  # Outbound exfiltration path
+    NT_IGW:            0.70,  # Internet gateway - critical for exposure
+    NT_VPC_ENDPOINT:   0.55,  # Private service access
+    NT_EC2_CREATE:     0.85,  # Privilege escalation capability
+    NT_LAMBDA_CREATE:  0.80,  # Privilege escalation capability
+    NT_IAM_MODIFY:     0.95,  # CRITICAL - IAM policy modification
 }
 
 
@@ -258,6 +273,110 @@ def build_graph(artifact_path: Path) -> nx.DiGraph:
             },
         )
 
+    # ── NAT Gateways ──────────────────────────────────────────────────────────
+    for nat in data.get("nat_gateways", []):
+        node_id = nat["nat_gateway_id"]
+        G.add_node(
+            node_id,
+            node_type=NT_NAT_GATEWAY,
+            label=f"NAT: {node_id}",
+            risk_score=0.0,
+            public=nat.get("public_ip") is not None,
+            account_id=data["account_id"],
+            region=nat.get("region", data["region"]),
+            metadata={
+                "state": nat.get("state"),
+                "public_ip": nat.get("public_ip"),
+                "connectivity_type": nat.get("connectivity_type"),
+            },
+        )
+
+    # ── Internet Gateways ─────────────────────────────────────────────────────
+    for igw in data.get("internet_gateways", []):
+        node_id = igw["igw_id"]
+        G.add_node(
+            node_id,
+            node_type=NT_IGW,
+            label=f"IGW: {node_id}",
+            risk_score=0.0,
+            public=True,  # IGWs are by definition internet-facing
+            account_id=data["account_id"],
+            region=igw.get("region", data["region"]),
+            metadata={
+                "state": igw.get("state"),
+                "vpc_id": igw.get("vpc_id"),
+            },
+        )
+
+    # ── VPC Endpoints ─────────────────────────────────────────────────────────
+    for vpce in data.get("vpc_endpoints", []):
+        node_id = vpce["endpoint_id"]
+        G.add_node(
+            node_id,
+            node_type=NT_VPC_ENDPOINT,
+            label=f"VPCe: {vpce.get('service_name', 'unknown')}",
+            risk_score=0.0,
+            public=False,
+            account_id=data["account_id"],
+            region=vpce.get("region", data["region"]),
+            metadata={
+                "service_name": vpce.get("service_name"),
+                "endpoint_type": vpce.get("endpoint_type"),
+                "state": vpce.get("state"),
+                "private_dns_enabled": vpce.get("private_dns_enabled"),
+            },
+        )
+
+    # ── Privilege Escalation Capability Nodes ─────────────────────────────────
+    # These are virtual nodes representing capabilities an attacker can gain
+    ec2_create_exists = any(
+        rel.get("target_id") == "EC2_CREATE_CAPABILITY"
+        for rel in data.get("relationships", [])
+    )
+    if ec2_create_exists:
+        G.add_node(
+            "EC2_CREATE_CAPABILITY",
+            node_type=NT_EC2_CREATE,
+            label="Can Create EC2",
+            risk_score=IMPACT_WEIGHTS[NT_EC2_CREATE],
+            public=False,
+            account_id=data["account_id"],
+            region="global",
+            metadata={"capability": "ec2_instance_creation"},
+        )
+
+    lambda_create_exists = any(
+        rel.get("target_id") == "LAMBDA_CREATE_CAPABILITY"
+        for rel in data.get("relationships", [])
+    )
+    if lambda_create_exists:
+        G.add_node(
+            "LAMBDA_CREATE_CAPABILITY",
+            node_type=NT_LAMBDA_CREATE,
+            label="Can Create Lambda",
+            risk_score=IMPACT_WEIGHTS[NT_LAMBDA_CREATE],
+            public=False,
+            account_id=data["account_id"],
+            region="global",
+            metadata={"capability": "lambda_function_creation"},
+        )
+
+    iam_modify_exists = any(
+        rel.get("target_id") == "IAM_MODIFY_CAPABILITY"
+        for rel in data.get("relationships", [])
+    )
+    if iam_modify_exists:
+        G.add_node(
+            "IAM_MODIFY_CAPABILITY",
+            node_type=NT_IAM_MODIFY,
+            label="Can Modify IAM",
+            risk_score=IMPACT_WEIGHTS[NT_IAM_MODIFY],
+            public=False,
+            account_id=data["account_id"],
+            region="global",
+            metadata={"capability": "iam_policy_modification", "severity": "critical"},
+        )
+
     # ── Add edges from relationships ──────────────────────────────────────────
     for rel in data.get("relationships", []):
         src = rel["source_id"]
@@ -282,6 +401,79 @@ def build_graph(artifact_path: Path) -> nx.DiGraph:
                 "graph_builder.edge_skipped",
                 src=src, tgt=tgt, missing_src=src not in G, missing_tgt=tgt not in G
             )
+
+    # ── Add edges from INTERNET to public-facing resources ────────────────────
+    # EC2 instances with public IPs
+    for node_id, attrs in G.nodes(data=True):
+        if attrs.get("node_type") == NT_EC2 and attrs.get("public", False):
+            G.add_edge(
+                "INTERNET", node_id,
+                edge_type=ET_EXPOSES,
+                weight=1.0,
+                validated=False,
+                exposure_reason="public_ip",
+            )
+            log.debug("graph_builder.internet_edge", target=node_id, reason="public_ip")
+
+    # Security groups with public ingress (0.0.0.0/0)
+    for node_id, attrs in G.nodes(data=True):
+        if attrs.get("node_type") == NT_SG and attrs.get("public", False):
+            G.add_edge(
+                "INTERNET", node_id,
+                edge_type=ET_EXPOSES,
+                weight=1.0,
+                validated=False,
+                exposure_reason="public_ingress",
+            )
+            log.debug("graph_builder.internet_edge", target=node_id, reason="public_ingress")
+
+    # Public S3 buckets
+    for node_id, attrs in G.nodes(data=True):
+        if attrs.get("node_type") == NT_S3 and attrs.get("public", False):
+            G.add_edge(
+                "INTERNET", node_id,
+                edge_type=ET_EXPOSES,
+                weight=1.0,
+                validated=False,
+                exposure_reason="public_bucket",
+            )
+            log.debug("graph_builder.internet_edge", target=node_id, reason="public_bucket")
+
+    # Publicly accessible RDS instances
+    for node_id, attrs in G.nodes(data=True):
+        if attrs.get("node_type") == NT_RDS and attrs.get("public", False):
+            G.add_edge(
+                "INTERNET", node_id,
+                edge_type=ET_EXPOSES,
+                weight=1.0,
+                validated=False,
+                exposure_reason="publicly_accessible",
+            )
+            log.debug("graph_builder.internet_edge", target=node_id, reason="publicly_accessible")
+
+    # NAT Gateways with public IPs
+    for node_id, attrs in G.nodes(data=True):
+        if attrs.get("node_type") == NT_NAT_GATEWAY and attrs.get("public", False):
+            G.add_edge(
+                "INTERNET", node_id,
+                edge_type=ET_EXPOSES,
+                weight=1.0,
+                validated=False,
+                exposure_reason="nat_public_ip",
+            )
+            log.debug("graph_builder.internet_edge", target=node_id, reason="nat_public_ip")
+
+    # Internet Gateways (always public)
+    for node_id, attrs in G.nodes(data=True):
+        if attrs.get("node_type") == NT_IGW:
+            G.add_edge(
+                "INTERNET", node_id,
+                edge_type=ET_CONNECTED,
+                weight=1.0,
+                validated=False,
+                exposure_reason="internet_gateway",
+            )
+            log.debug("graph_builder.internet_edge", target=node_id, reason="internet_gateway")
 
     node_count = G.number_of_nodes()
     edge_count = G.number_of_edges()
@@ -347,15 +539,21 @@ def _edge_weight(rel_type: str, props: dict) -> float:
     Used in path scoring.
     """
     weights = {
-        ET_EXPOSES:    1.0,   # Direct internet exposure = easiest
-        ET_TRUSTS:     0.9,   # Role trust = very easy if reachable
-        ET_ASSUMES:    0.8,   # EC2 metadata SSRF → role assumption
-        ET_CAN_ACCESS: 0.75,
-        ET_NETWORK:    0.7,
-        ET_CONNECTED:  0.4,
+        ET_EXPOSES:     1.0,   # Direct internet exposure = easiest
+        ET_TRUSTS:      0.9,   # Role trust = very easy if reachable
+        ET_ASSUMES:     0.8,   # EC2 metadata SSRF → role assumption
+        ET_CAN_ACCESS:  0.75,
+        ET_NETWORK:     0.7,
+        ET_CONNECTED:   0.4,
+        ET_CAN_CREATE:  0.85,  # Resource creation capability
+        ET_CAN_MODIFY:  0.9,   # Policy modification = critical
+        ET_ROUTES_VIA:  0.6,   # Route table traversal
     }
     base = weights.get(rel_type, 0.5)
     # Bump weight if this is a "*" trust (completely open)
     if props.get("principal") == "*":
         base = min(base + 0.1, 1.0)
+    # Bump weight for critical capabilities
+    if props.get("severity") == "critical":
+        base = min(base + 0.15, 1.0)
     return base
